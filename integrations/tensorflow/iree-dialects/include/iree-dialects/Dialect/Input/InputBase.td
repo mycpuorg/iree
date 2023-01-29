@@ -8,6 +8,7 @@
 #define IREE_DIALECTS_DIALECT_INPUT_BASE_TD
 
 include "mlir/IR/OpBase.td"
+include "mlir/IR/AttrTypeBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 def IREEInput_Dialect : Dialect {
@@ -26,12 +27,13 @@ def IREEInput_Dialect : Dialect {
     LLVM/MLIR's API surface is itself unstable.
   }];
   let cppNamespace = "::mlir::iree_compiler::IREE::Input";
+  let useDefaultTypePrinterParser = 1;
 }
 
 class IREEInput_Op<string mnemonic, list<Trait> traits = []> :
     Op<IREEInput_Dialect, mnemonic, traits>;
 class IREEInput_PureOp<string mnemonic, list<Trait> traits = []> :
-    Op<IREEInput_Dialect, mnemonic, !listconcat(traits, [NoSideEffect])>;
+    Op<IREEInput_Dialect, mnemonic, !listconcat(traits, [Pure])>;
 class IREEInput_Type<string name> : TypeDef<IREEInput_Dialect, name>;
 
 //===----------------------------------------------------------------------===//

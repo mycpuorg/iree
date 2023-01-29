@@ -11,12 +11,15 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include "mlir/Bytecode/BytecodeWriter.h"
+#include "mlir/Dialect/Quant/QuantOps.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "tensorflow/compiler/mlir/lite/flatbuffer_import.h"
@@ -26,7 +29,16 @@
 using namespace llvm;
 using namespace mlir;
 
+enum class OutputFormat {
+  none,
+  mlir_ir,
+  mlir_bytecode,
+};
+
 int main(int argc, char **argv) {
+  llvm::setBugReportMsg(
+      "Please report issues to https://github.com/iree-org/iree/issues and "
+      "include the crash backtrace.\n");
   llvm::InitLLVM y(argc, argv);
 
   static cl::opt<std::string> inputPath(
@@ -34,6 +46,15 @@ int main(int argc, char **argv) {
   static cl::opt<std::string> outputFilename("o", cl::desc("Output filename"),
                                              cl::value_desc("filename"),
                                              cl::init("-"));
+
+  // The output format flag is the master control for what we do with the
+  // in-memory compiled form.
+  llvm::cl::opt<OutputFormat> outputFormat(
+      "output-format", llvm::cl::desc("Format of imported output"),
+      llvm::cl::values(clEnumValN(OutputFormat::mlir_bytecode, "mlir-bytecode",
+                                  "MLIR Bytecode (default)"),
+                       clEnumValN(OutputFormat::mlir_ir, "mlir-ir", "MLIR IR")),
+      llvm::cl::init(OutputFormat::mlir_bytecode));
 
   static cl::opt<std::string> saveTempTflInput(
       "save-temp-tfl-input",
@@ -65,7 +86,7 @@ int main(int argc, char **argv) {
   registry.insert<mlir::TFL::TensorFlowLiteDialect>();
   registry.insert<mlir::tosa::TosaDialect>();
   registry.insert<quant::QuantizationDialect>();
-  registry.insert<StandardOpsDialect, mlir::arith::ArithmeticDialect>();
+  registry.insert<func::FuncDialect, mlir::arith::ArithDialect>();
 
   RegisterAllTensorFlowDialects(registry);
 
@@ -91,14 +112,22 @@ int main(int argc, char **argv) {
                                         outputArrayFlag.end());
   auto loc = mlir::FileLineColLoc::get(&context,
                                        inputFile->getBufferIdentifier(), 0, 0);
-  OwningOpRef<mlir::ModuleOp> module = tflite::FlatBufferToMlir(
-      absl::string_view(inputFile->getBufferStart(),
-                        inputFile->getBufferSize()),
-      &context, loc,
-      /*use_external_constant=*/false, inputArrays, outputArrays);
+  OwningOpRef<mlir::ModuleOp> module;
+  auto contents = absl::string_view(inputFile->getBufferStart(),
+                                    inputFile->getBufferSize());
+  if ((contents.substr(4, 4) == "TFL3")) {
+    module = tflite::FlatBufferToMlir(contents, &context, loc,
+                                      /*use_external_constant=*/false,
+                                      inputArrays, outputArrays);
+  } else {
+    module = ModuleOp::create(mlir::UnknownLoc::get(&context));
+    sourceMgr.AddNewSourceBuffer(MemoryBuffer::getMemBuffer(contents), SMLoc());
+    module = parseSourceFile<ModuleOp>(sourceMgr, &context);
+  }
+
   if (!module) {
     // Error should have emitted.
-    llvm::errs() << "Unable to import TFLite flatbuffer to MLIR Module\n";
+    llvm::errs() << "Unable to import TFLite FlatBuffer to MLIR Module\n";
     return 2;
   }
 
@@ -109,11 +138,22 @@ int main(int argc, char **argv) {
       llvm::errs() << "Could not open output file: " << savePath << "\n";
       return failure();
     }
-    OpPrintingFlags printFlags;
-    module->print(outputFile->os(), printFlags);
-    outputFile->os() << "\n";
-    outputFile->keep();
-    return success();
+
+    if (outputFormat == OutputFormat::mlir_ir) {
+      OpPrintingFlags printFlags;
+      module->print(outputFile->os(), printFlags);
+      outputFile->os() << "\n";
+      outputFile->keep();
+      return success();
+    }
+
+    if (outputFormat == OutputFormat::mlir_bytecode) {
+      mlir::writeBytecodeToFile(*module, outputFile->os());
+      outputFile->keep();
+      return success();
+    }
+    llvm::errs() << "Unknown output format\n";
+    return failure();
   };
 
   // Save temp input.

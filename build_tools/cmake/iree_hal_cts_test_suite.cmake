@@ -13,14 +13,14 @@ include(CMakeParseArguments)
 #
 # Parameters:
 #   DRIVER_NAME: The name of the driver to test. Used for both target names and
-#       for `iree_hal_driver_registry_try_create_by_name()` within test code.
+#       for `iree_hal_driver_registry_try_create()` within test code.
 #   VARIANT_SUFFIX: Suffix to add to the test names, separate from the driver
 #       name. Useful when specifying multiple configurations using `ARGS` or
 #       other parameters.
 #   DRIVER_REGISTRATION_HDR: The C #include path for `DRIVER_REGISTRATION_FN`.
 #   DRIVER_REGISTRATION_FN: The C function which registers `DRIVER_NAME`.
 #   COMPILER_TARGET_BACKEND: Optional target backend name to pass to the
-#       `-iree-hal-target-backends` option of `iree-translate` to use for
+#       `-iree-hal-target-backends` option of `iree-compile` to use for
 #       executable generation. If this is omitted, or the associated compiler
 #       target is not enabled, tests which use executables will be disabled.
 #   EXECUTABLE_FORMAT: Executable format identifier. Will be interpreted
@@ -50,16 +50,6 @@ function(iree_hal_cts_test_suite)
     ${ARGN}
   )
 
-  # Omit tests for which the specified driver is not enabled.
-  string(TOUPPER ${_RULE_DRIVER_NAME} _UPPERCASE_DRIVER)
-  string(REPLACE "-" "_" _NORMALIZED_DRIVER ${_UPPERCASE_DRIVER})
-  if(NOT DEFINED IREE_HAL_DRIVER_${_NORMALIZED_DRIVER})
-    message(SEND_ERROR "Unknown driver '${_RULE_DRIVER_NAME}'. Check IREE_HAL_DRIVER_* options.")
-  endif()
-  if(NOT IREE_HAL_DRIVER_${_NORMALIZED_DRIVER})
-    return()
-  endif()
-
   list(APPEND _RULE_LABELS "driver=${_RULE_DRIVER_NAME}")
 
   # Enable executable tests if a compiler target backend capable of producing
@@ -71,7 +61,7 @@ function(iree_hal_cts_test_suite)
     if(NOT DEFINED IREE_TARGET_BACKEND_${_NORMALIZED_TARGET_BACKEND})
       message(SEND_ERROR "Unknown backend '${_RULE_COMPILER_TARGET_BACKEND}'. Check IREE_TARGET_BACKEND_* options.")
     endif()
-    if(DEFINED IREE_HOST_BINARY_ROOT)
+    if(IREE_HOST_BIN_DIR)
       # If we're not building the host tools from source under this configuration,
       # such as when cross compiling, then we can't easily check for which
       # compiler target backends are enabled. Just assume all are enabled and only
@@ -91,13 +81,9 @@ function(iree_hal_cts_test_suite)
     set(_EXECUTABLES_TESTDATA_NAME "${_RULE_COMPILER_TARGET_BACKEND}_executables")
 
     set(_TRANSLATE_FLAGS
-      "-iree-mlir-to-hal-executable"
-      "-iree-hal-target-backends=${_RULE_COMPILER_TARGET_BACKEND}"
+      "--compile-mode=hal-executable"
+      "--iree-hal-target-backends=${_RULE_COMPILER_TARGET_BACKEND}"
     )
-    if(ANDROID)
-      set(_TARGET_TRIPLE "aarch64-none-linux-android${ANDROID_PLATFORM_LEVEL}")
-      list(APPEND _TRANSLATE_FLAGS "--iree-llvm-target-triple=${_TARGET_TRIPLE}")
-    endif()
 
     # Skip if already created (multiple suites using the same compiler setting).
     iree_package_name(_PACKAGE_NAME)
@@ -105,15 +91,15 @@ function(iree_hal_cts_test_suite)
       set(_EMBED_DATA_SOURCES "")
       foreach(_FILE_NAME ${IREE_ALL_CTS_EXECUTABLE_SOURCES})
         # Note: this is an abuse of naming. We are not building a bytecode
-        # module, but this CMake rule already wraps iree-translate.
+        # module, but this CMake rule already wraps iree-compile
         # We should add a new function like `iree_hal_executable()`.
         iree_bytecode_module(
           NAME
-            ${_RULE_COMPILER_TARGET_BACKEND}_${_FILE_NAME}
+            ${_RULE_COMPILER_TARGET_BACKEND}_${_FILE_NAME}_module
           MODULE_FILE_NAME
             "${_RULE_COMPILER_TARGET_BACKEND}_${_FILE_NAME}.bin"
           SRC
-            "${IREE_ROOT_DIR}/iree/hal/cts/testdata/${_FILE_NAME}.mlir"
+            "${IREE_ROOT_DIR}/runtime/src/iree/hal/cts/testdata/${_FILE_NAME}.mlir"
           FLAGS
             ${_TRANSLATE_FLAGS}
           PUBLIC
@@ -189,14 +175,14 @@ function(iree_hal_cts_test_suite)
 
     # Generate the source file for this [test x driver] pair.
     # TODO(scotttodd): Move to build time instead of configure time?
-    set(IREE_CTS_TEST_FILE_PATH "iree/hal/cts/${_TEST_NAME}_test.h")
+    set(IREE_CTS_TEST_FILE_PATH "runtime/src/iree/hal/cts/${_TEST_NAME}_test.h")
     set(IREE_CTS_DRIVER_REGISTRATION_HDR "${_RULE_DRIVER_REGISTRATION_HDR}")
     set(IREE_CTS_DRIVER_REGISTRATION_FN "${_RULE_DRIVER_REGISTRATION_FN}")
     set(IREE_CTS_TEST_CLASS_NAME "${_TEST_NAME}_test")
     set(IREE_CTS_DRIVER_NAME "${_RULE_DRIVER_NAME}")
 
     configure_file(
-      "${IREE_ROOT_DIR}/iree/hal/cts/cts_test_template.cc.in"
+      "${IREE_ROOT_DIR}/runtime/src/iree/hal/cts/cts_test_template.cc.in"
       ${_TEST_SOURCE_NAME}
     )
 

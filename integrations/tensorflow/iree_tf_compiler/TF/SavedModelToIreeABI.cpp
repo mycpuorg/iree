@@ -22,6 +22,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/JSON.h"
 #include "mlir/Dialect/Affine/Utils.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
@@ -65,8 +66,8 @@ json::Value mapTypeToJsonTypeRecord(Type type) {
     });
     if (shapedType.hasRank()) {
       for (auto dim : shapedType.getShape()) {
-        record.push_back(dim == ShapedType::kDynamicSize ? json::Value(nullptr)
-                                                         : json::Value(dim));
+        record.push_back(dim == ShapedType::kDynamic ? json::Value(nullptr)
+                                                     : json::Value(dim));
       }
     }
     return record;
@@ -130,7 +131,8 @@ struct StructureLevel {
       return IREE::Input::ListType::get(variantType.getContext(), variantType);
     }
 
-    llvm_unreachable("Unknown LevelType");
+    assert(false && "Unknown LevelType");
+    return Type();
   }
 
   // For List/Dict/Tuple levels, returns the size of the list that is needed
@@ -146,7 +148,8 @@ struct StructureLevel {
       return children.size();
     }
 
-    llvm_unreachable("Unsupported LevelType for getNeededListSize");
+    assert(false && "Unsupported LevelType for getNeededListSize");
+    return 0;
   }
 
   // Creates a JSON reflection type record describing this entity.
@@ -189,7 +192,7 @@ struct StructureLevel {
         return json::Value(std::move(typeRecord));
       }
       default:
-        llvm_unreachable("Unsupported LevelType");
+        assert(false && "Unsupported LevelType");
     }
 
     return json::Value(nullptr);
@@ -232,7 +235,7 @@ struct StructureLevel {
       }
       return;
     }
-    llvm_unreachable("unhandled StructureLevel type");
+    assert(false && "unhandled StructureLevel type");
   }
 
   // Emits operations to recursively create this structure from the given
@@ -286,7 +289,8 @@ struct StructureLevel {
       }
       return listValue;
     }
-    llvm_unreachable("unhandled StructureLevel type");
+    assert(false && "unhandled StructureLevel type");
+    return Value();
   }
 
   // Emits operations to load this instance from a parent list value at the
@@ -405,13 +409,14 @@ struct StructureLevel {
   }
 };
 
-LogicalResult materializeABIWrapper(ModuleOp module, FuncOp internalFunc,
+LogicalResult materializeABIWrapper(ModuleOp module, func::FuncOp internalFunc,
                                     StringRef exportedName) {
   Location loc = internalFunc.getLoc();
   OpBuilder builder(internalFunc);
   const StringAttr savedModelIndexPathIdent =
       builder.getStringAttr("tf_saved_model.index_path");
-  FunctionType internalFuncType = internalFunc.getType();
+  FunctionType internalFuncType =
+      internalFunc.getFunctionType().cast<FunctionType>();
   json::Array refArgs;
   json::Array refReturns;
 
@@ -487,7 +492,8 @@ LogicalResult materializeABIWrapper(ModuleOp module, FuncOp internalFunc,
   // Create the wrapper function.
   FunctionType wrapperFuncType =
       builder.getFunctionType(wrapperArgTypes, wrapperResultTypes);
-  auto wrapperFunc = builder.create<FuncOp>(loc, exportedName, wrapperFuncType);
+  auto wrapperFunc =
+      builder.create<func::FuncOp>(loc, exportedName, wrapperFuncType);
   SymbolTable::setSymbolVisibility(wrapperFunc,
                                    SymbolTable::Visibility::Public);
   Block *entryBlock = wrapperFunc.addEntryBlock();
@@ -510,8 +516,8 @@ LogicalResult materializeABIWrapper(ModuleOp module, FuncOp internalFunc,
   // Emit the call to the internal func.
   ResultRange internalResults =
       builder
-          .create<CallOp>(loc, internalFunc.getType().getResults(),
-                          internalFunc.getName(), callArgs)
+          .create<func::CallOp>(loc, internalFuncType.getResults(),
+                                internalFunc.getName(), callArgs)
           .getResults();
 
   // And then unflatten the results for return from the wrapper.
@@ -540,7 +546,7 @@ LogicalResult materializeABIWrapper(ModuleOp module, FuncOp internalFunc,
 
   assert(llvm::all_of(wrapperReturns, [](Value v) { return v != nullptr; }) &&
          "not all call returns mapped");
-  builder.create<ReturnOp>(loc, wrapperReturns);
+  builder.create<func::ReturnOp>(loc, wrapperReturns);
 
   // Add ABI attribute.
   {
@@ -590,7 +596,7 @@ class SavedModelToIREEABIPass
     (void)savedModelIndexPathIdent;
 
     // Handle saved model exported functions.
-    for (auto func : getOperation().getOps<FuncOp>()) {
+    for (auto func : getOperation().getOps<func::FuncOp>()) {
       // Transfer exported names to IREE.
       auto exportedNames = mlir::tf_saved_model::GetExportedNames(func);
       if (exportedNames.empty()) continue;

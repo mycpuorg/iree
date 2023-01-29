@@ -23,27 +23,37 @@ if(NOT PKGCONFIG)
 else()
   include(FindPkgConfig)
   pkg_check_modules(TRACY_DEPS
-    capstone
     tbb
     libzstd
+  )
+  pkg_check_modules(TRACY_CAPSTONE_DEPS
+    capstone
   )
   pkg_check_modules(TRACY_GTK_DEPS
     freetype2
     glfw3
     gtk+-3.0
+    dbus-1
   )
 endif()
 
+
 if(NOT TRACY_DEPS_FOUND)
   message(STATUS "Could not find Tracy dependencies (Tracy server will not be built).")
-  message(STATUS "To build Tracy, install packages capstone, and tbb (on Ubuntu/Debian, 'apt install libcapstone-dev libtbb-dev libzstd-dev')")
+  message(STATUS "To build Tracy, install packages libzstd, and tbb (on Ubuntu/Debian, 'apt install libcapstone-dev libtbb-dev libzstd-dev')")
+  return()
+endif()
+
+if(NOT TRACY_CAPSTONE_DEPS_FOUND)
+  message(STATUS "Could not find capstone, a Tracy dependency (Tracy server will not be built).")
+  message(STATUS "To build Tracy, install capstone (on Ubuntu/Debian, 'apt install libcapstone-dev')")
   return()
 endif()
 
 if(NOT TRACY_GTK_DEPS_FOUND)
   message(STATUS
     "Could not find deps required to build graphical programs: "
-    "Tracy graphical profiler will not be built (on Ubuntu/Debian, 'apt install libglfw3-dev libfreetype-dev libgtk-3-dev')")
+    "Tracy graphical profiler will not be built (on Ubuntu/Debian, 'apt install libglfw3-dev libfreetype-dev libgtk-3-dev libdbus-1-dev')")
 endif()
 
 #-------------------------------------------------------------------------------
@@ -63,12 +73,22 @@ function(setup_cxx_options name)
     PUBLIC
       ${TRACY_SOURCE_DIR}/imgui
       ${TRACY_DEPS_INCLUDE_DIRS}
+      ${TRACY_CAPSTONE_DEPS_INCLUDE_DIRS}
+      # capstone-next moved capstone.h to a capstone/ subdirectory, but the
+      # pkg-config isn't updated yet as of April 2022.
+      ${TRACY_CAPSTONE_DEPS_INCLUDE_DIRS}/capstone
   )
   target_link_libraries(${name}
     PRIVATE
       ${TRACY_DEPS_LIBRARIES}
+      ${TRACY_CAPSTONE_DEPS_LIBRARIES}
       ${CMAKE_DL_LIBS}
       ${CMAKE_THREAD_LIBS_INIT}
+  )
+  target_link_directories(${name}
+    PRIVATE
+      ${TRACY_DEPS_LIBRARY_DIRS}
+      ${TRACY_CAPSTONE_DEPS_LIBRARY_DIRS}
   )
 endfunction()
 
@@ -78,12 +98,16 @@ function(setup_graphics_deps name)
     DISPLAY_SERVER_X11
   )
   target_include_directories(${name}
-  PUBLIC
-    ${TRACY_GTK_DEPS_INCLUDE_DIRS}
+    PUBLIC
+      ${TRACY_GTK_DEPS_INCLUDE_DIRS}
   )
   target_link_libraries(${name}
-  PRIVATE
-    ${TRACY_GTK_DEPS_LIBRARIES}
+    PRIVATE
+      ${TRACY_GTK_DEPS_LIBRARIES}
+  )
+  target_link_directories(${name}
+    PRIVATE
+      ${TRACY_GTK_DEPS_LIBRARY_DIRS}
   )
 endfunction()
 
@@ -91,7 +115,7 @@ endfunction()
 # Common library
 #-------------------------------------------------------------------------------
 
-file(GLOB COMMON_SRCS ${TRACY_SOURCE_DIR}/common/*.cpp)
+file(GLOB COMMON_SRCS ${TRACY_SOURCE_DIR}/public/common/*.cpp)
 add_library(IREETracyCommon
   ${COMMON_SRCS}
 )
@@ -112,16 +136,6 @@ target_link_libraries(IREETracyServer
 )
 
 #-------------------------------------------------------------------------------
-# IMGUI library
-#-------------------------------------------------------------------------------
-
-file(GLOB IMGUI_SOURCES ${TRACY_SOURCE_DIR}/imgui/*.cpp)
-add_library(IREETracyIMGUI
-  ${IMGUI_SOURCES}
-)
-setup_cxx_options(IREETracyServer)
-
-#-------------------------------------------------------------------------------
 # Standalone capture server
 #-------------------------------------------------------------------------------
 
@@ -140,17 +154,47 @@ target_link_libraries(IREETracyCaptureServer
 )
 
 #-------------------------------------------------------------------------------
+# CSV Export Tool
+#-------------------------------------------------------------------------------
+
+add_executable(IREETracyCSVExport
+  ${TRACY_SOURCE_DIR}/csvexport/src/csvexport.cpp
+)
+set_target_properties(IREETracyCSVExport
+  PROPERTIES
+    OUTPUT_NAME "iree-tracy-csvexport"
+)
+setup_cxx_options(IREETracyCSVExport)
+target_link_libraries(IREETracyCSVExport
+  PRIVATE
+    IREETracyCommon
+    IREETracyServer
+)
+
+#-------------------------------------------------------------------------------
 # Graphical frontends
 #-------------------------------------------------------------------------------
 
 if(TRACY_GTK_DEPS_FOUND)
   #-----------------------------------------------------------------------------
+  # IMGUI library
+  #-----------------------------------------------------------------------------
+
+  file(GLOB IMGUI_SOURCES
+    ${TRACY_SOURCE_DIR}/imgui/*.cpp
+    ${TRACY_SOURCE_DIR}/profiler/src/imgui/*.cpp
+  )
+  add_library(IREETracyIMGUI
+    ${IMGUI_SOURCES}
+  )
+  setup_cxx_options(IREETracyIMGUI)
+
+  #-----------------------------------------------------------------------------
   # NFD library
   #-----------------------------------------------------------------------------
 
   set(NFD_SOURCES
-    ${TRACY_SOURCE_DIR}/nfd/nfd_common.c
-    ${TRACY_SOURCE_DIR}/nfd/nfd_gtk.c
+    ${TRACY_SOURCE_DIR}/nfd/nfd_portal.cpp
   )
   add_library(IREETracyNFD
     ${NFD_SOURCES}
@@ -163,6 +207,9 @@ if(TRACY_GTK_DEPS_FOUND)
   #-----------------------------------------------------------------------------
 
   file(GLOB PROFILER_SRCS ${TRACY_SOURCE_DIR}/profiler/src/*.cpp)
+  # Remove the source files for Wayland backend; right now we just use GLFW.
+  list(REMOVE_ITEM PROFILER_SRCS
+       "${TRACY_SOURCE_DIR}/profiler/src/BackendWayland.cpp")
   add_executable(IREETracyProfiler
     ${PROFILER_SRCS}
   )

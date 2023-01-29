@@ -8,6 +8,7 @@
 #include "iree_tf_compiler/TFL/Passes.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -28,14 +29,14 @@ class RetainCallOnceFuncsPass
   void runOnOperation() override {
     auto moduleOp = getOperation();
 
-    llvm::DenseMap<StringRef, FuncOp> funcMap;
-    for (auto func : moduleOp.getOps<mlir::FuncOp>()) {
-      funcMap[func.sym_name()] = func;
+    llvm::DenseMap<StringRef, func::FuncOp> funcMap;
+    for (auto func : moduleOp.getOps<mlir::func::FuncOp>()) {
+      funcMap[func.getSymName()] = func;
     }
 
-    for (auto func : moduleOp.getOps<mlir::FuncOp>()) {
+    for (auto func : moduleOp.getOps<mlir::func::FuncOp>()) {
       for (auto callOnce : func.getOps<mlir::TFL::CallOnceOp>()) {
-        auto callFunc = funcMap[callOnce.session_init_function()];
+        auto callFunc = funcMap[callOnce.getSessionInitFunction()];
         callOnce->setAttr("session_init_function_symbol",
                           SymbolRefAttr::get(callFunc));
       }

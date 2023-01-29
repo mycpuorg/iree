@@ -36,6 +36,8 @@ target_sources(${_NAME}
 )
 set_target_properties(${_NAME} PROPERTIES OUTPUT_NAME "web-sample-static-sync")
 
+target_compile_options(${_NAME} PRIVATE ${IREE_DEFAULT_COPTS})
+
 # Note: we have to be very careful about dependencies here.
 #
 # The general purpose libraries link in multiple executable loaders and HAL
@@ -44,12 +46,12 @@ target_link_libraries(${_NAME}
   ${_MNIST_OBJECT_NAME}
   iree_runtime_runtime
   iree_hal_local_loaders_static_library_loader
-  iree_hal_local_sync_driver
+  iree_hal_drivers_local_sync_sync_driver
 )
 
 target_link_options(${_NAME} PRIVATE
   # https://emscripten.org/docs/porting/connecting_cpp_and_javascript/Interacting-with-code.html#interacting-with-code-ccall-cwrap
-  "-sEXPORTED_FUNCTIONS=['_setup_sample', '_cleanup_sample', '_run_sample']"
+  "-sEXPORTED_FUNCTIONS=['_setup_sample', '_cleanup_sample', '_run_sample', '_malloc']"
   "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
   #
   "-sASSERTIONS=1"
@@ -78,6 +80,8 @@ target_sources(${_NAME}
 )
 set_target_properties(${_NAME} PROPERTIES OUTPUT_NAME "web-sample-static-multithreaded")
 
+target_compile_options(${_NAME} PRIVATE ${IREE_DEFAULT_COPTS})
+
 # Note: we have to be very careful about dependencies here.
 #
 # The general purpose libraries link in multiple executable loaders and HAL
@@ -86,13 +90,13 @@ target_link_libraries(${_NAME}
   ${_MNIST_OBJECT_NAME}
   iree_runtime_runtime
   iree_hal_local_loaders_static_library_loader
-  iree_hal_local_task_driver
+  iree_hal_drivers_local_task_task_driver
   iree_task_api
 )
 
 target_link_options(${_NAME} PRIVATE
   # https://emscripten.org/docs/porting/connecting_cpp_and_javascript/Interacting-with-code.html#interacting-with-code-ccall-cwrap
-  "-sEXPORTED_FUNCTIONS=['_setup_sample', '_cleanup_sample', '_run_sample']"
+  "-sEXPORTED_FUNCTIONS=['_setup_sample', '_cleanup_sample', '_run_sample', '_malloc']"
   "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
   #
   "-sASSERTIONS=1"
@@ -128,5 +132,7 @@ target_link_options(${_NAME} PRIVATE
   # IREE is pretty good about not allocating outside of startup, so concerns
   # about this causing slow access to memory *may* not affect IREE too much.
   # "-sALLOW_MEMORY_GROWTH=1"
+  # TODO(scotttodd): tune this (figure out where memory is going and trim)
+  # "-sINITIAL_MEMORY=33554432"
   # ------------------------------------------------------------------------- #
 )

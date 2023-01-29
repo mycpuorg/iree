@@ -1,4 +1,3 @@
-# Lint as: python3
 # Copyright 2019 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
@@ -16,7 +15,7 @@ class TfFunctionUnitTestModule(tf_test_utils.TestModule):
 
   @tf_test_utils.tf_function_unit_test(input_signature=[])
   def no_args(self):
-    return np.array([True], dtype=np.bool)
+    return np.array([True], dtype=bool)
 
   @tf_test_utils.tf_function_unit_test(input_signature=[
       tf.TensorSpec([4]),

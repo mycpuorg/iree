@@ -112,7 +112,11 @@ static bool SlurpFile(const std::string& file_name, std::string* contents) {
   if (!f.good()) return false;
 
   if (length > kMaxSize) {
-    std::cerr << "File " << file_name << " is too large\n";
+    fprintf(stderr,
+            "File '%s' is too large to embed into a C file (%lld bytes > %lld "
+            "bytes). Consider other methods for packaging and loading on your "
+            "platform, such as using traditional file I/O\n",
+            file_name.c_str(), (long long)length, (long long)kMaxSize);
     return false;
   }
 
@@ -132,14 +136,14 @@ static bool GenerateImpl(const std::string& identifier,
   f << "#include <stdint.h>\n";
   f << R"(
 #if !defined(IREE_DATA_ALIGNAS_PTR)
+// Default set to 512b alignment.
 #if defined(_MSC_VER)
-#define IREE_DATA_ALIGNAS_PTR __declspec(align(8))
+#define IREE_DATA_ALIGNAS_PTR __declspec(align(64))
 #else
-#include <stdalign.h>
-#define IREE_DATA_ALIGNAS_PTR alignas(alignof(void*))
+#define IREE_DATA_ALIGNAS_PTR _Alignas(64)
 #endif  // _MSC_VER
 #endif  // !IREE_DATA_ALIGNAS_PTR
-  )";
+)";
   GenerateTocStruct(f);
   for (size_t i = 0, e = input_files.size(); i < e; ++i) {
     f << "IREE_DATA_ALIGNAS_PTR static uint8_t const file_" << i << "[] = {\n";
@@ -175,9 +179,11 @@ static bool GenerateImpl(const std::string& identifier,
   }
   f << "  {NULL, NULL, 0},\n";
   f << "};\n";
+  GenerateExternCOpen(f);
   f << "const struct iree_file_toc_t* " << identifier << "_create() {\n";
   f << "  return &toc[0];\n";
   f << "}\n";
+  GenerateExternCClose(f);
   f.close();
   return f.good();
 }

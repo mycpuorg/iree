@@ -4,7 +4,8 @@
 
 You will need to install [CMake](https://cmake.org/), the
 [Ninja](https://ninja-build.org/) CMake generator, and the clang or MSVC C/C++
-compilers:
+compilers. The tests also requires [Python3](https://www.python.org/) and the
+python package [requests](https://requests.readthedocs.io/en/latest/) to run.
 
 ???+ Note
     You are welcome to try different CMake generators and compilers, but IREE
@@ -13,7 +14,7 @@ compilers:
     we generally expect it to work due to its similarity with Linux. Patches to
     improve support for these are always welcome.
 
-=== "Linux and macOS"
+=== "Linux"
 
     1. Install a compiler/linker (typically "clang" and "lld" package)
 
@@ -26,6 +27,19 @@ compilers:
 
     ``` shell
     sudo apt install cmake ninja-build clang lld
+    ```
+
+=== "macOS"
+
+    1. Install [CMake](https://cmake.org/download/) (typically "cmake" package)
+
+    2. Install [Ninja](https://ninja-build.org/) (typically "ninja-build"
+       package)
+
+    If using Homebrew:
+
+    ``` shell
+    brew install cmake ninja
     ```
 
 === "Windows"
@@ -51,7 +65,7 @@ Use [Git](https://git-scm.com/) to clone the IREE repository and initialize its
 submodules:
 
 ``` shell
-git clone https://github.com/google/iree.git
+git clone https://github.com/iree-org/iree.git
 cd iree
 git submodule update --init
 ```
@@ -76,7 +90,9 @@ Configure CMake:
 
     # Additional quality of life CMake flags:
     # Enable ccache:
-    #   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+    # See https://github.com/iree-org/iree/blob/main/docs/developers/developing_iree/ccache.md
+    #   -DCMAKE_C_COMPILER_LAUNCHER=ccache
+    #   -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
     ```
 
 === "Windows"
@@ -109,12 +125,17 @@ cmake --build ../iree-build/
 
 ### Running tests
 
+Build test dependencies:
+
+``` shell
+cmake --build ../iree-build --target iree-test-deps
+```
+
 Run all built tests through
 [CTest](https://gitlab.kitware.com/cmake/community/-/wikis/doc/ctest/Testing-With-CTest):
 
 ``` shell
-cd ../iree-build/
-ctest --output-on-failure
+ctest --test-dir ../iree-build/ --output-on-failure
 ```
 
 ### Take a look around
@@ -122,8 +143,8 @@ ctest --output-on-failure
 Check out the contents of the 'tools' build directory:
 
 ``` shell
-ls ../iree-build/iree/tools/
-../iree-build/iree/tools/iree-translate --help
+ls ../iree-build/tools/
+../iree-build/tools/iree-compile --help
 ```
 
 <!-- TODO(scotttodd): troubleshooting section? link to github issues? -->

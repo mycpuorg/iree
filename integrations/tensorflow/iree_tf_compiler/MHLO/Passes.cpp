@@ -6,8 +6,8 @@
 
 #include "iree_tf_compiler/MHLO/Passes.h"
 
-#include "mlir-hlo/Dialect/mhlo/transforms/passes.h"
-#include "mlir/Dialect/SCF/Passes.h"
+#include "mhlo/transforms/passes.h"
+#include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -25,7 +25,7 @@ void buildMHLOImportPassPipeline(OpPassManager &pm) {
 
   // Import pipelines should end with canonicalization because they may have
   // access to dialects and patterns that the core compiler does not.
-  pm.addNestedPass<FuncOp>(mlir::createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
 }
 
 void registerMHLOImportPassPipeline() {

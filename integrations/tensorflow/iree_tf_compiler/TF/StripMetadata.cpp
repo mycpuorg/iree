@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree_tf_compiler/TF/Passes.h"
+#include "mlir/IR/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
@@ -54,7 +55,8 @@ class StripModuleMetadataPass
 };
 
 class StripFunctionMetadataPass
-    : public PassWrapper<StripFunctionMetadataPass, OperationPass<FuncOp>> {
+    : public PassWrapper<StripFunctionMetadataPass,
+                         OperationPass<func::FuncOp>> {
  public:
   StringRef getArgument() const override {
     return "iree-tf-strip-function-metadata";
@@ -75,7 +77,7 @@ class StripFunctionMetadataPass
 
     for (int i = 0; i < funcOp.getNumArguments(); ++i) {
       auto stripAttrs = llvm::to_vector<4>(llvm::make_filter_range(
-          funcOp.getArgAttrs(i),
+          mlir::function_interface_impl::getArgAttrs(funcOp, i),
           [](NamedAttribute namedAttr) { return isTFAttr(namedAttr); }));
       for (auto namedAttr : stripAttrs) {
         funcOp.removeArgAttr(i, namedAttr.getName());
@@ -84,7 +86,7 @@ class StripFunctionMetadataPass
 
     for (int i = 0; i < funcOp.getNumResults(); ++i) {
       auto stripAttrs = llvm::to_vector<4>(llvm::make_filter_range(
-          funcOp.getResultAttrs(i),
+          mlir::function_interface_impl::getResultAttrs(funcOp, i),
           [](NamedAttribute namedAttr) { return isTFAttr(namedAttr); }));
       for (auto namedAttr : stripAttrs) {
         funcOp.removeResultAttr(i, namedAttr.getName());
@@ -97,7 +99,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createStripModuleMetadataPass() {
   return std::make_unique<StripModuleMetadataPass>();
 }
 
-std::unique_ptr<OperationPass<FuncOp>> createStripFunctionMetadataPass() {
+std::unique_ptr<OperationPass<func::FuncOp>> createStripFunctionMetadataPass() {
   return std::make_unique<StripFunctionMetadataPass>();
 }
 

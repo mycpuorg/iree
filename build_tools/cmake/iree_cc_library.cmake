@@ -11,6 +11,7 @@ include(CMakeParseArguments)
 # CMake function to imitate Bazel's cc_library rule.
 #
 # Parameters:
+# PACKAGE: Name of the package (overrides actual path)
 # NAME: name of target (see Note)
 # HDRS: List of public header files for the library
 # TEXTUAL_HDRS: List of public header files that cannot be compiled on their own
@@ -25,7 +26,7 @@ include(CMakeParseArguments)
 # Also in IDE, target will appear in IREE folder while non PUBLIC will be in IREE/internal.
 # TESTONLY: When added, this target will only be built if user passes -DIREE_BUILD_TESTS=ON to CMake.
 # SHARED: If set, will compile to a shared object.
-#
+# WINDOWS_DEF_FILE: If set, will add a windows .def file to a shared library link
 # Note:
 # By default, iree_cc_library will always create a library named iree_${NAME},
 # and alias target iree::${NAME}. The iree:: form should always be used.
@@ -61,7 +62,7 @@ function(iree_cc_library)
   cmake_parse_arguments(
     _RULE
     "PUBLIC;TESTONLY;SHARED"
-    "NAME"
+    "PACKAGE;NAME;WINDOWS_DEF_FILE"
     "HDRS;TEXTUAL_HDRS;SRCS;COPTS;DEFINES;LINKOPTS;DATA;DEPS;INCLUDES"
     ${ARGN}
   )
@@ -70,23 +71,28 @@ function(iree_cc_library)
     return()
   endif()
 
-  # Replace dependencies passed by ::name with iree::package::name
-  iree_package_ns(_PACKAGE_NS)
-  list(TRANSFORM _RULE_DEPS REPLACE "^::" "${_PACKAGE_NS}::")
-
   # Prefix the library with the package name, so we get: iree_package_name.
-  iree_package_name(_PACKAGE_NAME)
+  if(_RULE_PACKAGE)
+    set(_PACKAGE_NS "${_RULE_PACKAGE}")
+    string(REPLACE "::" "_" _PACKAGE_NAME ${_RULE_PACKAGE})
+  else()
+    iree_package_ns(_PACKAGE_NS)
+    iree_package_name(_PACKAGE_NAME)
+  endif()
   set(_NAME "${_PACKAGE_NAME}_${_RULE_NAME}")
   set(_OBJECTS_NAME ${_NAME}.objects)
+
+  # Replace dependencies passed by ::name with iree::package::name
+  list(TRANSFORM _RULE_DEPS REPLACE "^::" "${_PACKAGE_NS}::")
 
   # Check if this is a header-only library.
   # Note that as of February 2019, many popular OS's (for example, Ubuntu
   # 16.04 LTS) only come with cmake 3.5 by default.  For this reason, we can't
   # use list(FILTER...)
   set(_CC_SRCS "${_RULE_SRCS}")
-  foreach(src_file IN LISTS _CC_SRCS)
-    if(${src_file} MATCHES ".*\\.(h|inc)")
-      list(REMOVE_ITEM _CC_SRCS "${src_file}")
+  foreach(_SRC_FILE IN LISTS _CC_SRCS)
+    if(${_SRC_FILE} MATCHES ".*\\.(h|inc)")
+      list(REMOVE_ITEM _CC_SRCS "${_SRC_FILE}")
     endif()
   endforeach()
   if("${_CC_SRCS}" STREQUAL "")
@@ -95,12 +101,28 @@ function(iree_cc_library)
     set(_RULE_IS_INTERFACE 0)
   endif()
 
+  # Wrap user specified INCLUDES in the $<BUILD_INTERFACE:>
+  # generator.
+  list(TRANSFORM _RULE_INCLUDES PREPEND "$<BUILD_INTERFACE:")
+  list(TRANSFORM _RULE_INCLUDES APPEND ">")
+
+  # Implicit deps.
+  if(IREE_IMPLICIT_DEFS_CC_DEPS)
+    list(APPEND _RULE_DEPS ${IREE_IMPLICIT_DEFS_CC_DEPS})
+  endif()
+
   if(NOT _RULE_IS_INTERFACE)
     add_library(${_OBJECTS_NAME} OBJECT)
     if(_RULE_SHARED)
       add_library(${_NAME} SHARED "$<TARGET_OBJECTS:${_OBJECTS_NAME}>")
+      if(_RULE_WINDOWS_DEF_FILE AND WIN32)
+        target_sources(${_NAME} PRIVATE "${_RULE_WINDOWS_DEF_FILE}")
+      endif()
     else()
       add_library(${_NAME} STATIC "$<TARGET_OBJECTS:${_OBJECTS_NAME}>")
+      if(_RULE_WINDOWS_DEF_FILE AND WIN32)
+        message(SEND_ERROR "If specifying a .def file library must be shared")
+      endif()
     endif()
 
     # Sources get added to the object library.
@@ -152,7 +174,7 @@ function(iree_cc_library)
     )
     target_include_directories(${_NAME}
       PUBLIC
-        "$<BUILD_INTERFACE:${_RULE_INCLUDES}>"
+        ${_RULE_INCLUDES}
     )
     target_compile_options(${_NAME}
       PRIVATE
@@ -198,6 +220,7 @@ function(iree_cc_library)
       INTERFACE
         "$<BUILD_INTERFACE:${IREE_SOURCE_DIR}>"
         "$<BUILD_INTERFACE:${IREE_BINARY_DIR}>"
+        ${_RULE_INCLUDES}
     )
     target_link_options(${_NAME}
       INTERFACE
@@ -221,12 +244,14 @@ function(iree_cc_library)
   # disambiguate the underscores in paths vs. the separators.
   add_library(${_PACKAGE_NS}::${_RULE_NAME} ALIAS ${_NAME})
 
-  # If the library name matches the final component of the package then treat
-  # it as a default. For example, foo/bar/ library 'bar' would end up as
-  # 'foo::bar'.
-  iree_package_dir(_PACKAGE_DIR)
-  if(${_RULE_NAME} STREQUAL ${_PACKAGE_DIR})
-    add_library(${_PACKAGE_NS} ALIAS ${_NAME})
+  if(NOT "${_PACKAGE_NS}" STREQUAL "")
+    # If the library name matches the final component of the package then treat
+    # it as a default. For example, foo/bar/ library 'bar' would end up as
+    # 'foo::bar'.
+    iree_package_dir(_PACKAGE_DIR)
+    if(${_RULE_NAME} STREQUAL ${_PACKAGE_DIR})
+      add_library(${_PACKAGE_NS} ALIAS ${_NAME})
+    endif()
   endif()
 endfunction()
 
@@ -244,20 +269,20 @@ endfunction()
 #     targets that are not under teh "iree::" namespace but are encountered
 #     in the dependency dag.
 function(_iree_cc_library_add_object_deps name)
-  foreach(dep_target ${ARGN})
-    if(dep_target MATCHES "^iree::")
+  foreach(_DEP_TARGET ${ARGN})
+    if(_DEP_TARGET MATCHES "^iree::")
       set_property(TARGET ${name} APPEND PROPERTY
         INTERFACE_IREE_TRANSITIVE_OBJECTS
-        "$<GENEX_EVAL:$<TARGET_PROPERTY:${dep_target},INTERFACE_IREE_TRANSITIVE_OBJECTS>>"
+        "$<GENEX_EVAL:$<TARGET_PROPERTY:${_DEP_TARGET},INTERFACE_IREE_TRANSITIVE_OBJECTS>>"
       )
       set_property(TARGET ${name} APPEND PROPERTY
       INTERFACE_IREE_TRANSITIVE_OBJECT_LIBS
-        "$<GENEX_EVAL:$<TARGET_PROPERTY:${dep_target},INTERFACE_IREE_TRANSITIVE_OBJECT_LIBS>>"
+        "$<GENEX_EVAL:$<TARGET_PROPERTY:${_DEP_TARGET},INTERFACE_IREE_TRANSITIVE_OBJECT_LIBS>>"
       )
     else()
       set_property(TARGET ${name} APPEND PROPERTY
         INTERFACE_IREE_TRANSITIVE_OBJECT_LIBS
-        ${dep_target}
+        ${_DEP_TARGET}
       )
     endif()
   endforeach()
@@ -301,21 +326,25 @@ function(iree_cc_unified_library)
   set(_NAME "${_PACKAGE_NAME}_${_RULE_NAME}")
 
   # Evaluate the object and libs.
-  set(_objects "$<REMOVE_DUPLICATES:$<GENEX_EVAL:$<TARGET_PROPERTY:${_RULE_ROOT},INTERFACE_IREE_TRANSITIVE_OBJECTS>>>")
-  set(_libs "$<REMOVE_DUPLICATES:$<GENEX_EVAL:$<TARGET_PROPERTY:${_RULE_ROOT},INTERFACE_IREE_TRANSITIVE_OBJECT_LIBS>>>")
+  set(_OBJECTS "$<REMOVE_DUPLICATES:$<GENEX_EVAL:$<TARGET_PROPERTY:${_RULE_ROOT},INTERFACE_IREE_TRANSITIVE_OBJECTS>>>")
+  set(_LIBS "$<REMOVE_DUPLICATES:$<GENEX_EVAL:$<TARGET_PROPERTY:${_RULE_ROOT},INTERFACE_IREE_TRANSITIVE_OBJECT_LIBS>>>")
 
   # For debugging, write out evaluated objects to a file.
-  file(GENERATE OUTPUT "${_RULE_NAME}.contents.txt" CONTENT
-    "OBJECTS:\n${_objects}\n\nLIBS:\n${_libs}\n")
+  # This cannot be enabled for Xcode given that Xcode does not support
+  # per-configuration sources.
+  if (NOT "${CMAKE_GENERATOR}" STREQUAL "Xcode")
+    file(GENERATE OUTPUT "${_RULE_NAME}.$<CONFIG>.contents.txt" CONTENT
+      "OBJECTS:\n${_OBJECTS}\n\nLIBS:\n${_LIBS}\n")
+  endif()
   if(_RULE_SHARED)
-    add_library(${_NAME} SHARED ${_objects})
+    add_library(${_NAME} SHARED ${_OBJECTS})
   else()
-    add_library(${_NAME} STATIC ${_objects})
+    add_library(${_NAME} STATIC ${_OBJECTS})
   endif()
 
   target_link_libraries(${_NAME}
     PUBLIC
-      ${_libs}
+      ${_LIBS}
   )
 
   # Forward compile usage requirements from the root library.

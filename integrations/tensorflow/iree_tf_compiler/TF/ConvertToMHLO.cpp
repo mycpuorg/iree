@@ -5,17 +5,18 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree_tf_compiler/TF/Passes.h"
-#include "mlir-hlo/Dialect/mhlo/IR/chlo_ops.h"
-#include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
-#include "mlir-hlo/Dialect/mhlo/transforms/rewriters.h"
+#include "mhlo/IR/hlo_ops.h"
+#include "mhlo/transforms/rewriters.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Shape/IR/Shape.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "stablehlo/dialect/ChloOps.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_executor.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
@@ -32,15 +33,14 @@ namespace TF {
 // It does not require the same number of options as we can hardcode as the pass
 // the IREE requires.
 class ConvertToMHLOPass
-    : public PassWrapper<ConvertToMHLOPass, OperationPass<FuncOp>> {
+    : public PassWrapper<ConvertToMHLOPass, OperationPass<func::FuncOp>> {
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry
-        .insert<mlir::linalg::LinalgDialect, mlir::TF::TensorFlowDialect,
-                mlir::tf_executor::TensorFlowExecutorDialect,
-                mlir::tf_device::TensorFlowDeviceDialect,
-                mlir::tf_saved_model::TensorFlowSavedModelDialect,
-                chlo::HloClientDialect, mhlo::MhloDialect, shape::ShapeDialect,
-                mlir::arith::ArithmeticDialect, StandardOpsDialect>();
+    registry.insert<mlir::linalg::LinalgDialect, mlir::TF::TensorFlowDialect,
+                    mlir::tf_executor::TensorFlowExecutorDialect,
+                    mlir::tf_device::TensorFlowDeviceDialect,
+                    mlir::tf_saved_model::TensorFlowSavedModelDialect,
+                    chlo::ChloDialect, mhlo::MhloDialect, shape::ShapeDialect,
+                    mlir::arith::ArithDialect, func::FuncDialect>();
   }
 
   StringRef getArgument() const override { return "iree-tf-convert-to-mhlo"; }
@@ -88,14 +88,14 @@ class ConvertToMHLOPass
     chlo::ConstantLikeOp::getCanonicalizationPatterns(patterns, context);
 
     ConversionTarget target(*context);
-    target.addLegalDialect<chlo::HloClientDialect>();
+    target.addLegalDialect<chlo::ChloDialect>();
     target.addLegalDialect<linalg::LinalgDialect>();
     target.addLegalDialect<mhlo::MhloDialect>();
-    target.addLegalDialect<mlir::StandardOpsDialect,
-                           mlir::arith::ArithmeticDialect>();
+    target
+        .addLegalDialect<mlir::func::FuncDialect, mlir::arith::ArithDialect>();
     target.addLegalDialect<shape::ShapeDialect>();
     target.addLegalDialect<tensor::TensorDialect>();
-    target.addLegalOp<mlir::CallOp>();
+    target.addLegalOp<mlir::func::CallOp>();
     target.addLegalOp<mlir::tensor::CastOp>();
     target.addLegalOp<mlir::tensor::DimOp>();
 
@@ -110,7 +110,7 @@ class ConvertToMHLOPass
     // condition in legalize_to_linalg.cc for this op.
     target.addDynamicallyLegalOp<mhlo::DynamicBroadcastInDimOp>(
         [](mhlo::DynamicBroadcastInDimOp op) {
-          if (auto t = op.operand()
+          if (auto t = op.getOperand()
                            .getType()
                            .template dyn_cast<RankedTensorType>()) {
             if (t.hasStaticShape()) {

@@ -22,14 +22,16 @@ the import, compilation, and execution of the provided model.
 * [TensorFlow](./tensorflow.md)
 * [TensorFlow Lite](./tflite.md)
 * [JAX](./jax.md)
+* [PyTorch](./pytorch.md)
 
-Importing from PyTorch and other frameworks is planned - stay tuned!
+Importing from other frameworks is planned - stay tuned!
 
 ## Samples
 
-Check out the samples in IREE's [colab/directory](https://github.com/google/iree/tree/main/colab),
-as well as the [iree-samples repository](https://github.com/google/iree-samples)
-respository, which contains workflow comparisons across frameworks.
+Check out the samples in IREE's
+[samples/colab/ directory](https://github.com/iree-org/iree/tree/main/colab),
+as well as the [iree-samples repository](https://github.com/iree-org/iree-samples),
+which contains workflow comparisons across frameworks.
 
 ## Import
 
@@ -42,7 +44,7 @@ involves a number of stages:
 * Validate only IREE compatible operations remain
 * Write the remaining IR to a file
 
-This fully legalized form can then be compiled without dependencies on the 
+This fully legalized form can then be compiled without dependencies on the
 source model language.
 
 ## Compilation

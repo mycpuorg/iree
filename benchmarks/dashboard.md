@@ -81,20 +81,15 @@ some examples:
 
 This field specifies the IREE HAL driver:
 
-* [`Dylib`](https://google.github.io/iree/deployment-configurations/cpu-dylib/):
-  For CPU via dynamic library. Kernels contain CPU native instructions AOT
-  compiled using LLVM. This driver issues workload to the CPU in async
-  manner and supports multithreading.
-* [`Dylib-Sync`](https://google.github.io/iree/deployment-configurations/cpu-dylib/):
-  For CPU via dynamic library. Kernels contain contain CPU native instructions
-  AOT compiled using LLVM. This driver issues workload to the CPU in sync
-  manner.
-* [`VMVX`](https://github.com/google/iree/issues/5123):
-  For CPU via dynamic library. Kernels contain vector-level intrinsics that
-  are backed by fast implementations ([WIP](https://github.com/google/iree/issues/5819)).
-  This driver issues workload to the CPU in async manner and supports
-  multithreading.
-* [`Vulkan`](https://google.github.io/iree/deployment-configurations/gpu-vulkan/):
+* [`local-task`](https://iree-org.github.io/iree/deployment-configurations/cpu/):
+  For CPU via the local task system. Kernels contain CPU native instructions AOT
+  compiled using LLVM. This driver issues workloads to the CPU asynchronously
+  and supports multithreading.
+* [`local-sync`](https://iree-org.github.io/iree/deployment-configurations/cpu/):
+  For CPU via the local 'sync' device. Kernels contain contain CPU native
+  instructions AOT compiled using LLVM. This driver issues workloads to the CPU
+  synchronously.
+* [`Vulkan`](https://iree-org.github.io/iree/deployment-configurations/gpu-vulkan/):
   For GPU via Vulkan. Kernels contain SPIR-V. This driver issues workload to
   the GPU via the Vulkan API.
 

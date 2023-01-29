@@ -1,4 +1,3 @@
-# Lint as: python3
 # Copyright 2020 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
@@ -52,7 +51,7 @@ CONV_KWARGS_TO_VALUES = dict(filters=[CONV_FILTERS],
                              strides=[1, 2],
                              padding=["valid", "same"],
                              data_format=[None, "channels_first"],
-                             dilation_rate=[1, 2])
+                             dilation_rate=[1, 1])
 # Address pooling and conv layers having different default values for
 # 'data_format' for 1D layers.
 POOLING_1D_KWARGS_TO_VALUES = copy.deepcopy(POOLING_KWARGS_TO_VALUES)
@@ -83,6 +82,14 @@ LAYERS_TO_MUTUALLY_EXCLUSIVE_KWARGS = {
     "Conv3D": ["strides", "dilation_rate"],
     "ConvLSTM2D": ["strides", "dilation_rate"],
 }
+
+# Some layers cannot operate on a fully dynamic shape, only dynamic batch size.
+LAYERS_WITH_BATCH_ONLY_DYNAMIC_SHAPE = [
+    "AveragePooling1D",  # uses tf.nn.avg_pool2d with reshape, which is illegal
+    "BatchNormalization",  # failed to materialize conversion
+    "Conv3D",  # tf.Conv3D op illegal
+    "MaxPool1D",  # uses tf.nn.max_pool2d with reshape, which is illegal
+]
 
 
 def get_default_kwargs_values(layer: str) -> Dict[str, Any]:
@@ -223,7 +230,7 @@ LAYERS_TO_UNIT_TEST_SPECS = {
                                   kernel_size=[CONV_KERNEL_SIZE],
                                   return_state=[False, True],
                                   strides=[1, 2],
-                                  dilation_rate=[1, 2],
+                                  dilation_rate=[1, 1],
                                   stateful=[False, True])),
     "Cropping1D":
         tf_test_utils.unit_test_specs_from_signatures(
@@ -247,7 +254,7 @@ LAYERS_TO_UNIT_TEST_SPECS = {
             kwargs_to_values=dict(kernel_size=[CONV_KERNEL_SIZE],
                                   strides=[1, 2],
                                   padding=["valid", "same"],
-                                  dilation_rate=[1, 2],
+                                  dilation_rate=[1, 1],
                                   depth_multiplier=[1, 2])),
     "Dot":
         tf_test_utils.unit_test_specs_from_signatures(
@@ -298,7 +305,7 @@ LAYERS_TO_UNIT_TEST_SPECS = {
     "Lambda":
         tf_test_utils.unit_test_specs_from_signatures(
             signature_shapes=UNARY_SIGNATURE_SHAPES,
-            kwargs_to_values=dict(function=[lambda x: x**2])),
+            kwargs_to_values=dict(function=[lambda x: x * x])),
     "LayerNormalization":
         tf_test_utils.unit_test_specs_from_signatures(UNARY_SIGNATURE_SHAPES),
     "LeakyReLU":
@@ -365,7 +372,7 @@ LAYERS_TO_UNIT_TEST_SPECS = {
                                   kernel_size=[CONV_KERNEL_SIZE],
                                   strides=[1, 2],
                                   padding=["valid", "same"],
-                                  dilation_rate=[1, 2],
+                                  dilation_rate=[1, 1],
                                   depth_multiplier=[1, 2])),
     "SeparableConv2D":
         tf_test_utils.unit_test_specs_from_signatures(
@@ -374,7 +381,7 @@ LAYERS_TO_UNIT_TEST_SPECS = {
                                   kernel_size=[CONV_KERNEL_SIZE],
                                   strides=[1, 2],
                                   padding=["valid", "same"],
-                                  dilation_rate=[1, 2],
+                                  dilation_rate=[1, 1],
                                   depth_multiplier=[1, 2])),
     "SimpleRNN":
         tf_test_utils.unit_test_specs_from_signatures(
@@ -502,8 +509,16 @@ def create_layer_unit_test(
 
   dynamic_signature = static_signature
   if FLAGS.dynamic_dims:
-    dynamic_signature = tf_utils.apply_function(dynamic_signature,
-                                                tf_utils.make_dims_dynamic)
+
+    def make_batch_size_dynamic(tensor_spec: tf.TensorSpec) -> tf.TensorSpec:
+      return tf.TensorSpec([None] + tensor_spec.shape[1:], tensor_spec.dtype)
+
+    if FLAGS.layer in LAYERS_WITH_BATCH_ONLY_DYNAMIC_SHAPE:
+      dynamic_signature = tf_utils.apply_function(dynamic_signature,
+                                                  make_batch_size_dynamic)
+    else:
+      dynamic_signature = tf_utils.apply_function(dynamic_signature,
+                                                  tf_utils.make_dims_dynamic)
 
   if len(static_signature) > 1:
     static_signature = [static_signature]

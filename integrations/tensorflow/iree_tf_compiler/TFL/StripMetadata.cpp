@@ -6,6 +6,7 @@
 
 #include "iree_tf_compiler/TFL/PassDetail.h"
 #include "iree_tf_compiler/TFL/Passes.h"
+#include "mlir/IR/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 
@@ -17,6 +18,9 @@ namespace {
 static bool isTFLAttr(NamedAttribute &namedAttr) {
   // NOTE: tflite mixes tf and tfl, for some reason.
   auto name = namedAttr.getName().strref();
+  // Don't trim attributes from tf_saved_model---they carry ABI information.
+  if (name.startswith("tf_saved_model.")) return false;
+
   if (name.startswith("tf.") || name.startswith("tf_") ||
       name.startswith("tfl.") || name.startswith("tfl_")) {
     return true;
@@ -28,7 +32,6 @@ static bool isTFLAttr(NamedAttribute &namedAttr) {
 class StripModuleMetadataPass
     : public StripModuleMetadataBase<StripModuleMetadataPass> {
  public:
-
   void runOnOperation() override {
     auto moduleOp = getOperation();
     auto stripAttrs = llvm::to_vector<4>(llvm::make_filter_range(
@@ -43,7 +46,6 @@ class StripModuleMetadataPass
 class StripFunctionMetadataPass
     : public StripFunctionMetadataBase<StripFunctionMetadataPass> {
  public:
-
   void runOnOperation() override {
     auto funcOp = getOperation();
     auto stripAttrs = llvm::to_vector<4>(llvm::make_filter_range(
@@ -55,7 +57,7 @@ class StripFunctionMetadataPass
 
     for (int i = 0; i < funcOp.getNumArguments(); ++i) {
       auto stripAttrs = llvm::to_vector<4>(llvm::make_filter_range(
-          funcOp.getArgAttrs(i),
+          mlir::function_interface_impl::getArgAttrs(funcOp, i),
           [](NamedAttribute namedAttr) { return isTFLAttr(namedAttr); }));
       for (auto namedAttr : stripAttrs) {
         funcOp.removeArgAttr(i, namedAttr.getName());
@@ -64,7 +66,7 @@ class StripFunctionMetadataPass
 
     for (int i = 0; i < funcOp.getNumResults(); ++i) {
       auto stripAttrs = llvm::to_vector<4>(llvm::make_filter_range(
-          funcOp.getResultAttrs(i),
+          mlir::function_interface_impl::getResultAttrs(funcOp, i),
           [](NamedAttribute namedAttr) { return isTFLAttr(namedAttr); }));
       for (auto namedAttr : stripAttrs) {
         funcOp.removeResultAttr(i, namedAttr.getName());
@@ -79,7 +81,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createStripModuleMetadataPass() {
   return std::make_unique<StripModuleMetadataPass>();
 }
 
-std::unique_ptr<OperationPass<FuncOp>> createStripFunctionMetadataPass() {
+std::unique_ptr<OperationPass<func::FuncOp>> createStripFunctionMetadataPass() {
   return std::make_unique<StripFunctionMetadataPass>();
 }
 

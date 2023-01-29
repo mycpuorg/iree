@@ -9,10 +9,11 @@
 // while additional work lands upstream.
 
 #include "iree_tf_compiler/TF/Passes.h"
-#include "mlir-hlo/Dialect/mhlo/IR/chlo_ops.h"
-#include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
+#include "mhlo/IR/hlo_ops.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/PatternMatch.h"
+#include "stablehlo/dialect/ChloOps.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 
 namespace TFOps = mlir::TF;
@@ -32,7 +33,7 @@ struct ConvertExplicitSqueezePattern
   LogicalResult matchAndRewrite(TFOps::SqueezeOp op,
                                 PatternRewriter &rewriter) const override {
     RankedTensorType inputType =
-        op.input().getType().dyn_cast<RankedTensorType>();
+        op.getInput().getType().dyn_cast<RankedTensorType>();
     RankedTensorType resultType = op.getType().dyn_cast<RankedTensorType>();
     if (!resultType) {
       // This will happen if shape inference could not determine a rank,
@@ -48,7 +49,7 @@ struct ConvertExplicitSqueezePattern
     }
 
     rewriter.replaceOpWithNewOp<tensor::CollapseShapeOp>(
-        op, resultType, op.input(), *reassociationIndices);
+        op, resultType, op.getInput(), *reassociationIndices);
     return success();
   }
 };
@@ -62,13 +63,13 @@ struct ConvertConstExpandDimsPattern
   LogicalResult matchAndRewrite(TFOps::ExpandDimsOp op,
                                 PatternRewriter &rewriter) const override {
     RankedTensorType inputType =
-        op.input().getType().dyn_cast<RankedTensorType>();
+        op.getInput().getType().dyn_cast<RankedTensorType>();
     RankedTensorType resultType = op.getType().dyn_cast<RankedTensorType>();
     if (!resultType) {
       return rewriter.notifyMatchFailure(op, "not ranked");
     }
     DenseIntElementsAttr dimAttr;
-    if (!matchPattern(op.dim(), m_Constant(&dimAttr))) {
+    if (!matchPattern(op.getDim(), m_Constant(&dimAttr))) {
       return rewriter.notifyMatchFailure(op, "not constant dim");
     }
     int expandDim = (*dimAttr.value_begin<APInt>()).getSExtValue();
@@ -100,7 +101,7 @@ struct ConvertConstExpandDimsPattern
     }
 
     rewriter.replaceOpWithNewOp<tensor::ExpandShapeOp>(
-        op, expandedType, op.input(), *reassociationIndices);
+        op, expandedType, op.getInput(), *reassociationIndices);
     return success();
   }
 };

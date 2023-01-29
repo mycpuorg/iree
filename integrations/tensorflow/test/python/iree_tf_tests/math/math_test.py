@@ -405,8 +405,10 @@ FUNCTIONS_TO_UNIT_TEST_SPECS = {
         tf_test_utils.unit_test_specs_from_signatures(
             signature_shapes=[[[1, 2, 2, 2], [1, 2, 2, 2]]],
             signature_dtypes=[tf.float32, tf.int32, tf.complex64],
+            # Avoid numbers <1 or large ones that will overflow
             input_generators={
-                "positive_ndarange": lambda *args: tf_utils.ndarange(*args) + 1
+                "positive_moderate_ndarange":
+                    lambda *args: tf_utils.uniform(*args, low=1.0, high=3.0)
             }),
     "real":
         tf_test_utils.unit_test_specs_from_signatures(
@@ -425,7 +427,7 @@ FUNCTIONS_TO_UNIT_TEST_SPECS = {
         # reduction axes return True.
         *tf_test_utils.unit_test_specs_from_args(
             names_to_input_args={
-                "all_true": [np.ones(RANK_7_SHAPE, np.bool)],
+                "all_true": [np.ones(RANK_7_SHAPE, bool)],
             },
             kwargs_to_values=REDUCE_KWARGS_TO_VALUES),
         *tf_test_utils.unit_test_specs_from_signatures(
@@ -438,7 +440,7 @@ FUNCTIONS_TO_UNIT_TEST_SPECS = {
         # reduction axes return False.
         *tf_test_utils.unit_test_specs_from_args(
             names_to_input_args={
-                "all_false": [np.zeros(RANK_7_SHAPE, np.bool)],
+                "all_false": [np.zeros(RANK_7_SHAPE, bool)],
             },
             kwargs_to_values=REDUCE_KWARGS_TO_VALUES),
         *tf_test_utils.unit_test_specs_from_signatures(

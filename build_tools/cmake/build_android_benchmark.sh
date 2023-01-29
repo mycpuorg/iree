@@ -34,13 +34,15 @@ ROOT_DIR=$(git rev-parse --show-toplevel)
 cd "${ROOT_DIR}"
 
 # BUILD the iree-import-tflite binary for importing models to benchmark from
-# TFLite flatbuffers.
+# TFLite FlatBuffers.
 cd "${ROOT_DIR}/integrations/tensorflow"
 BAZEL_CMD=(bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree-tf.bazelrc)
 BAZEL_BINDIR="$(${BAZEL_CMD[@]} info bazel-bin)"
-"${BAZEL_CMD[@]}" build //iree_tf_compiler:iree-import-tflite \
+"${BAZEL_CMD[@]}" build \
+      //iree_tf_compiler:iree-import-tflite \
+      //iree_tf_compiler:iree-import-tf \
       --config=generic_clang \
-      --config=remote_cache_bazel_ci
+      --config=remote_cache_bazel_tf_ci
 # So the benchmark build below can find the importer binaries that were built.
 export PATH="$PWD/bazel-bin/iree_tf_compiler:$PATH"
 
@@ -64,11 +66,18 @@ cd build-host
   -DIREE_BUILD_COMPILER=ON \
   -DIREE_BUILD_TESTS=OFF \
   -DIREE_BUILD_BENCHMARKS=ON \
+  -DIREE_ENABLE_COMPILATION_BENCHMARKS=ON \
+  -DIREE_BUILD_MICROBENCHMARKS=ON \
   -DIREE_BUILD_SAMPLES=OFF
 
 "${CMAKE_BIN}" --build . --target install -- -k 0
 # Also generate artifacts for benchmarking on Android.
-"${CMAKE_BIN}" --build . --target iree-benchmark-suites -- -k 0
+"${CMAKE_BIN}" --build . --target \
+  iree-benchmark-suites-android-arm64-v8a \
+  iree-benchmark-suites-android-adreno \
+  iree-benchmark-suites-android-mali \
+  -- -k 0
+"${CMAKE_BIN}" --build . --target iree-microbenchmark-suites -- -k 0
 # --------------------------------------------------------------------------- #
 
 # --------------------------------------------------------------------------- #
@@ -90,7 +99,7 @@ cd build-android
   -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-29 \
-  -DIREE_HOST_BINARY_ROOT="${PWD}/../build-host/install" \
+  -DIREE_HOST_BIN_DIR="${PWD}/../build-host/install/bin" \
   -DIREE_BUILD_COMPILER=OFF \
   -DIREE_BUILD_TESTS=ON \
   -DIREE_BUILD_SAMPLES=OFF
@@ -115,7 +124,7 @@ cd build-android-trace
   -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-29 \
-  -DIREE_HOST_BINARY_ROOT="${PWD}/../build-host/install" \
+  -DIREE_HOST_BIN_DIR="${PWD}/../build-host/install/bin" \
   -DIREE_ENABLE_RUNTIME_TRACING=ON \
   -DIREE_BUILD_COMPILER=OFF \
   -DIREE_BUILD_TESTS=ON \

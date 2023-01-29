@@ -5,6 +5,14 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 ###############################################################################
+# Short-hand config settings for IREE specific features.
+###############################################################################
+
+# Equivalent to CMake flag IREE_ENABLE_RUNTIME_TRACING.
+# Builds the runtime with tracing support enabled.
+build --flag_alias=iree_enable_runtime_tracing=@tracy_client//:runtime_enable
+
+###############################################################################
 # Common flags that apply to all configurations.
 # Use sparingly for things common to all compilers and platforms.
 ###############################################################################
@@ -28,18 +36,22 @@ test --test_output=errors
 startup --windows_enable_symlinks
 build --enable_runfiles
 
-
 # TODO: Transition to the explicit init_py mechanism. See #2405
 # This is commented out while considering transition path but left as a
 # breadcrumb.
 # build --incompatible_default_to_explicit_init_py
 
 ###############################################################################
+# Build settings flag aliases. See https://bazel.build/rules/config
+###############################################################################
+build --flag_alias=iree_drivers=//iree/hal/drivers:enabled_drivers
+
+###############################################################################
 # Options for "generic_gcc" builds
 ###############################################################################
 
-# C++14 standard version is required.
-build:generic_gcc --cxxopt=-std=c++14 --host_cxxopt=-std=c++14
+# C++17 standard version is required.
+build:generic_gcc --cxxopt=-std=c++17 --host_cxxopt=-std=c++17
 
 # TODO: OSS assert builds of TF became non functional around 1/27/2022. RIP.
 # Default to adding back asserts in optimized builds.
@@ -59,8 +71,8 @@ build:generic_gcc --copt=-Wno-stringop-truncation
 # either clang or gcc and are curated based on need.
 ###############################################################################
 
-# C++14 standard version is required.
-build:generic_clang --cxxopt=-std=c++14 --host_cxxopt=-std=c++14
+# C++17 standard version is required.
+build:generic_clang --cxxopt=-std=c++17 --host_cxxopt=-std=c++17
 
 # TODO: OSS assert builds of TF became non functional around 1/27/2022. RIP.
 # Default to adding back asserts in optimized builds.
@@ -93,7 +105,6 @@ build:generic_clang --copt=-Wall
 # ratio.
 build:generic_clang --copt=-Wno-ambiguous-member-template
 build:generic_clang --copt=-Wno-char-subscripts
-build:generic_clang --copt=-Wno-deprecated-declarations
 build:generic_clang --copt=-Wno-extern-c-compat # Matches upstream. Cannot impact due to extern C inclusion method.
 build:generic_clang --copt=-Wno-gnu-alignof-expression
 build:generic_clang --copt=-Wno-gnu-variable-sized-type-not-at-end
@@ -139,6 +150,10 @@ build:generic_clang --copt=-Wthread-safety
 build:generic_clang --copt=-Wthread-safety-beta
 build:generic_clang --copt=-Wunused-comparison
 build:generic_clang --copt=-Wvla
+
+# Treat backrefs during linking as errors.
+build:generic_clang --linkopt=-Wl,--warn-backrefs
+build:generic_clang --linkopt=-Wl,--fatal-warnings
 
 ###############################################################################
 # Additional options for MacOS based clang builds.
@@ -264,7 +279,9 @@ build:remote_cache_bazel_ci --config=_remote_cache_base
 # specific docker container the CI Bazel builds are run in. The image URL is
 # included for clarity and so that this reference is automatically updated by
 # manage_images.py
-build:remote_cache_bazel_ci --host_platform_remote_properties_override='properties:{name:"cache-silo-key" value:"gcr.io/iree-oss/frontends-swiftshader@sha256:c73aef3cb6ac80fa23583bed49e68edaf148ff7c2a40a700b60c3ccb4c5584b9"}'
+build:remote_cache_bazel_ci --host_platform_remote_properties_override='properties:{name:"cache-silo-key" value:"gcr.io/iree-oss/swiftshader-bleeding-edge@sha256:8be446ba48a571b37c861574391c10715130d28cd5cadc86e5ec8080c0c6d4fa"}'
+build:remote_cache_bazel_tf_ci --host_platform_remote_properties_override='properties:{name:"cache-silo-key" value:"gcr.io/iree-oss/frontends-swiftshader@sha256:414071144e8b742ec61eccf69a657e13424513b7574153820367de355e494e0a"}'
+
 
 ###############################################################################
 # Configuration for uploading build results to Result Store UI
@@ -359,10 +376,3 @@ build:msvc2019 --per_file_copt=tensorflow@/Zc:preprocessor
 # Assume the newer version and alias to --config=windows
 build:msvc --config=msvc2019
 build:windows --config=msvc
-
-###############################################################################
-# disable metal stuff for non Darwin platforms
-###############################################################################
-common:non_darwin --deleted_packages=//iree/hal/metal,//iree/hal/metal/registration
-build:non_darwin --test_tag_filters="-driver=metal"
-###############################################################################

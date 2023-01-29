@@ -27,15 +27,13 @@ Also see [instructions for installing pre-built binaries](../bindings/python.md)
 
 * A relatively recent Python3 installation >=3.7 (we aim to support
   [non-eol Python versions](https://endoflife.date/python)).
-* Installation of python dependencies as specified in
-  [`bindings/python/build_requirements.txt`](https://github.com/google/iree/blob/main/bindings/python/build_requirements.txt).
 
 **CMake Variables:**
 
 * **`IREE_BUILD_PYTHON_BINDINGS`** : `BOOL`
 
-    Enables building of Python bindings under `bindings/python` in the repository.
-    Defaults to `OFF`.
+    Enables building of Python bindings under `runtime/bindings/python` in the
+    repository. Defaults to `OFF`.
 
 * **`Python3_EXECUTABLE`** : `PATH`
 
@@ -73,12 +71,19 @@ package manager ([about](https://docs.python.org/3/library/venv.html),
     python -m pip install --upgrade pip
 
     # Install IREE build pre-requisites.
-    python -m pip install -r ./bindings/python/build_requirements.txt
+    python -m pip install -r ./runtime/bindings/python/iree/runtime/build_requirements.txt
     ```
 
 === "Windows"
 
     ``` powershell
+    # Make sure your 'python' is what you expect.
+    # Also consider using the Python launcher 'py' instead of 'python':
+    # https://docs.python.org/3/using/windows.html#python-launcher-for-windows
+    which python
+    python --version
+    py --list-paths
+
     # Create a persistent virtual environment (first time only).
     python -m venv .venv
 
@@ -91,7 +96,7 @@ package manager ([about](https://docs.python.org/3/library/venv.html),
     python -m pip install --upgrade pip
 
     # Install IREE build pre-requisites.
-    python -m pip install -r bindings\python\build_requirements.txt
+    python -m pip install -r runtime\bindings\python\iree\runtime\build_requirements.txt
     ```
 
 When you are done with the venv, you can close it by closing your shell
@@ -112,8 +117,7 @@ From the `iree-build` directory:
         .
     cmake --build .
 
-    # Add ./bindings/python and compiler-api/python_package to PYTHONPATH and
-    # use the API.
+    # Add the bindings/python paths to PYTHONPATH and use the API.
     source .env && export PYTHONPATH
     python -c "import iree.compiler"
     python -c "import iree.runtime"
@@ -125,9 +129,8 @@ From the `iree-build` directory:
     cmake -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DIREE_BUILD_PYTHON_BINDINGS=ON .
     cmake --build .
 
-    # Add bindings\python and compiler-api\python_package to PYTHONPATH and use
-    # the API.
-    set PYTHONPATH="$pwd\compiler-api\python_package;$pwd\bindings\python;%PYTHONPATH%"
+    # Add the bindings/python paths to PYTHONPATH and use the API.
+    .env.bat
     python -c "import iree.compiler"
     python -c "import iree.runtime"
     ```
@@ -158,7 +161,7 @@ APIs under `import iree.compiler.tf`, `import iree.compiler.tflite`,
 !!! Warning
 
     This section is under construction. Refer to the
-    [source documentation](https://github.com/google/iree/tree/main/integrations/tensorflow#readme)
+    [source documentation](https://github.com/iree-org/iree/tree/main/integrations/tensorflow#readme)
     for the latest building from source instructions.
 
 ???+ Note

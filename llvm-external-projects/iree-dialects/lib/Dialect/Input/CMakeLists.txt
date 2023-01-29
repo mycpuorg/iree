@@ -9,7 +9,7 @@ add_mlir_library(IREEInputDialect
   IREEInputIncGen
 
   LINK_LIBS PUBLIC
-  MLIRArithmetic
+  MLIRArithDialect
   MLIRIR
   MLIRInferTypeOpInterface
   MLIRSideEffectInterfaces

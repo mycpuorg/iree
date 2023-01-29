@@ -14,12 +14,12 @@
 #include "iree_tf_compiler/MHLO/Passes.h"
 #include "iree_tf_compiler/TF/Passes.h"
 #include "llvm/Support/InitLLVM.h"
-#include "mlir-hlo/Dialect/mhlo/IR/chlo_ops.h"
-#include "mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
+#include "mhlo/IR/hlo_ops.h"
 #include "mlir/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/IR/Dialect.h"
-#include "mlir/Support/MlirOptMain.h"
+#include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
+#include "stablehlo/dialect/ChloOps.h"
 #include "tensorflow/compiler/mlir/tensorflow/dialect_registration.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
 #include "tensorflow/compiler/mlir/tosa/tf_passes.h"
@@ -27,11 +27,14 @@
 #include "tensorflow/compiler/mlir/tosa/transforms/passes.h"
 
 int main(int argc, char **argv) {
+  llvm::setBugReportMsg(
+      "Please report issues to https://github.com/iree-org/iree/issues and "
+      "include the crash backtrace.\n");
   llvm::InitLLVM y(argc, argv);
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::iree_compiler::IREE::Input::IREEInputDialect>();
-  registry.insert<mlir::chlo::HloClientDialect, mlir::mhlo::MhloDialect>();
+  registry.insert<mlir::chlo::ChloDialect, mlir::mhlo::MhloDialect>();
 
   // TensorFlow integration passes.
   mlir::RegisterAllTensorFlowDialects(registry);

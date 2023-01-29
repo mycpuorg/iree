@@ -1,4 +1,3 @@
-# Lint as: python3
 # Copyright 2021 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
@@ -19,16 +18,16 @@ import time
 import urllib.request
 
 targets = {
-    'llvmaot': 'dylib-llvm-aot',
+    'llvmcpu': 'llvm-cpu',
     'vulkan': 'vulkan-spirv',
 }
 
 configs = {
-    'llvmaot': 'dylib',
+    'llvmcpu': 'local-task',
     'vulkan': 'vulkan',
 }
 
-absl.flags.DEFINE_string('target_backend', 'llvmaot', 'model path to execute')
+absl.flags.DEFINE_string('target_backend', 'llvmcpu', 'model path to execute')
 
 absl.flags.DEFINE_string(
     "artifacts_dir", None,
@@ -63,15 +62,15 @@ class TFLiteModelTest(testing.absltest.TestCase):
     if self.model_path is None:
       return
     self.workdir = _setup_artifacts_dir("download")
-    print(f"TMP_DIR = {self.workdir}")
-    self.tflite_file = '/'.join([self.workdir, 'model.tflite'])
-    self.tflite_ir = '/'.join([self.workdir, 'tflite.mlir'])
-    self.iree_ir = '/'.join([self.workdir, 'tosa.mlir'])
+    print(f"TMPDIR = {self.workdir}")
+    self.tflite_file = '/'.join([self.workdir, 'model.mlirbc'])
+    self.tflite_ir = '/'.join([self.workdir, 'tflite.mlirbc'])
+    self.iree_ir = '/'.join([self.workdir, 'tosa.mlirbc'])
     if os.path.exists(self.model_path):
       self.tflite_file = self.model_path
     else:
       urllib.request.urlretrieve(self.model_path, self.tflite_file)
-    self.binary = '/'.join([self.workdir, 'module.bytecode'])
+    self.binary = '/'.join([self.workdir, 'module.vmfb'])
 
   def generate_inputs(self, input_details):
     args = []
@@ -106,7 +105,7 @@ class TFLiteModelTest(testing.absltest.TestCase):
     with open(self.binary, 'rb') as f:
       config = iree_rt.Config(configs[absl.flags.FLAGS.target_backend])
       self.iree_context = iree_rt.SystemContext(config=config)
-      vm_module = iree_rt.VmModule.from_flatbuffer(f.read())
+      vm_module = iree_rt.VmModule.from_flatbuffer(config.vm_instance, f.read())
       self.iree_context.add_vm_module(vm_module)
 
   def invoke_tflite(self, args):

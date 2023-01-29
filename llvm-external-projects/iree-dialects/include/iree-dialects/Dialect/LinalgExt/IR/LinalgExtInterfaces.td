@@ -22,7 +22,7 @@ def LinalgExtInterface : OpInterface<"LinalgExtOp"> {
         Return the input shape operands.
       }],
       /*retTy=*/"ValueRange",
-      /*methodName=*/"inputs",
+      /*methodName=*/"getInputs",
       /*args=*/(ins)
     >,
     // These special methods rely on `inputs` and `outputs` being defined by
@@ -36,7 +36,7 @@ def LinalgExtInterface : OpInterface<"LinalgExtOp"> {
       /*args=*/(ins),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return $_op.inputs().size();
+        return $_op.getInputs().size();
       }]
     >,
     // `outputs` must be defined by each op that wants to implement the
@@ -46,7 +46,7 @@ def LinalgExtInterface : OpInterface<"LinalgExtOp"> {
         Return the output shape operands.
       }],
       /*retTy=*/"ValueRange",
-      /*methodName=*/"outputs",
+      /*methodName=*/"getOutputs",
       /*args=*/(ins)
     >,
     InterfaceMethod<
@@ -58,7 +58,7 @@ def LinalgExtInterface : OpInterface<"LinalgExtOp"> {
       /*args=*/(ins),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return $_op.outputs().size();
+        return $_op.getOutputs().size();
       }]
     >,
     InterfaceMethod<
@@ -185,6 +185,19 @@ def LinalgExtInterface : OpInterface<"LinalgExtOp"> {
     >,
     InterfaceMethod<
       /*desc=*/[{
+        Set the `i`-th output operand.
+      }],
+      /*retTy=*/"void",
+      /*methodName=*/"setOutputOperand",
+      /*args=*/(ins "int64_t":$i, "Value":$value),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        assert(i >= 0 && i < getNumOutputs());
+        this->getOperation()->setOperand(getNumInputs() + i, value);
+      }]
+    >,
+    InterfaceMethod<
+      /*desc=*/[{
         Return the subset of output operands that are of buffer type.
       }],
       /*retTy=*/"OpOperandVector",
@@ -284,30 +297,6 @@ def LinalgExtInterface : OpInterface<"LinalgExtOp"> {
     >,
     InterfaceMethod<
       /*desc=*/[{
-        Return true if the payload uses the value loaded from `opOperand`. This
-        is useful to avoid loading from "write-only" memory that may be
-        uninitialized, as well as properly cloning "read-write" operands.
-      }],
-      /*retTy=*/"bool",
-      /*methodName=*/"payloadUsesValueFromOperand",
-      /*args=*/(ins "OpOperand *":$opOperand),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        unsigned bbArgNumber = opOperand->getOperandNumber();
-        // Safeguard against the named linalg ops that are manually defined and
-        // that only support buffer semantics: we should not be there.
-        // Such ops have an empty regionBuilder and are not constructed with a
-        // region for now. In the future they are slated to disappear.
-        assert(this->getOperation()->getNumRegions() == 1 && "unexpected "
-               "missing region (calling `payloadUsesValueFromOperand` on "
-               "manually defined named Linalg op?)");
-        Block &block = this->getOperation()->getRegion(0).front();
-        // Init tensors have uses.
-        return !block.getArgument(bbArgNumber).use_empty();
-      }]
-    >,
-    InterfaceMethod<
-      /*desc=*/[{
         Return true if `opOperand` is an input tensor.
       }],
       /*retTy=*/"bool",
@@ -336,21 +325,6 @@ def LinalgExtInterface : OpInterface<"LinalgExtOp"> {
         if (opOperand->getOperandNumber() >= $_op.getNumInputs())
           return true;
         return false;
-      }]
-    >,
-    InterfaceMethod<
-      /*desc=*/[{
-        Return true if `opOperand` is an init tensor. This is true when it is
-        an output tensor operand whose value is used in the payload region.
-      }],
-      /*retTy=*/"bool",
-      /*methodName=*/"isInitTensor",
-      /*args=*/(ins "OpOperand *":$opOperand),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        if (!$_op.isOutputTensor(opOperand))
-          return false;
-        return payloadUsesValueFromOperand(opOperand);
       }]
     >,
     InterfaceMethod<
@@ -385,87 +359,41 @@ def LinalgExtInterface : OpInterface<"LinalgExtOp"> {
         return {};
       }]
     >,
-    InterfaceMethod<
-      /*desc=*/[{
-        Return true if the `opOperand` is a scalar value.
-      }],
-      /*retTy=*/"bool",
-      /*methodName=*/"isScalar",
-      /*args=*/(ins "OpOperand*":$opOperand),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        assert(opOperand->getOwner() == this->getOperation());
-        return !opOperand->get().getType().template isa<ShapedType>();
-      }]
-    >,
     //===------------------------------------------------------------------===//
-    // Other interface methods.
+    // Non input and output operands handling
     //===------------------------------------------------------------------===//
     InterfaceMethod<
       /*desc=*/[{
-        Return whether the op has only MemRef input and outputs.
+        Return operands that are neither inputs nor outputs.
       }],
-      /*retTy=*/"bool",
-      /*methodName=*/"hasBufferSemantics",
+      /*retTy=*/"OpOperandVector",
+      /*methodName=*/"getNonInputOrOutputOperands",
       /*args=*/(ins),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
-        return this->getOperation()->getNumResults() == 0 &&
-          llvm::all_of(getInputOperands(), [&](OpOperand *opOperand) {
-            return isScalar(opOperand) ||
-              opOperand->get().getType().template isa<MemRefType>();
-          }) &&
-          llvm::all_of(getOutputOperands(), [](OpOperand *opOperand) {
-            return opOperand->get().getType().template isa<MemRefType>();
-          });
-      }]
-    >,
-    InterfaceMethod<
-      /*desc=*/[{
-        Return whether the op has only RankedTensor input and outputs.
-      }],
-      /*retTy=*/"bool",
-      /*methodName=*/"hasTensorSemantics",
-      /*args=*/(ins),
-      /*methodBody=*/"",
-      /*defaultImplementation=*/[{
-        return
-          llvm::all_of(getInputOperands(), [&](OpOperand *opOperand) {
-            return isScalar(opOperand) ||
-              opOperand->get().getType().template isa<RankedTensorType>();
-          }) &&
-          llvm::all_of(getOutputOperands(), [](OpOperand *opOperand) {
-            return opOperand->get().getType().template isa<RankedTensorType>();
-          });
-      }]
-    >,
-    //===------------------------------------------------------------------===//
-    // Other static interface methods.
-    //===------------------------------------------------------------------===//
-    InterfaceMethod<
-      /*desc=*/[{
-        Clone the current operation with the given location and operands. This
-        is used to abstract away the optional underlying region creation. This
-        does not change the balance between input, output_buffer and
-        init_tensors operands.
-      }],
-      /*retTy=*/"Operation *",
-      /*methodName=*/"clone",
-      (ins "OpBuilder &":$b, "Location":$loc, "TypeRange":$resultTypes,
-           "ValueRange":$operands),
-      [{
-        BlockAndValueMapping bvm;
-        OperationState state(
-          loc, ConcreteOp::getOperationName(), operands, resultTypes,
-          $_op->getAttrs());
-        for (Region &r : $_op->getRegions())
-          r.cloneInto(state.addRegion(), bvm);
-        return b.createOperation(state);
+        int64_t numInputsAndOutputs = getNumInputsAndOutputs();
+        int64_t numOperands = this->getOperation()->getNumOperands();
+        assert(numInputsAndOutputs <= numOperands);
+        if (numInputsAndOutputs == numOperands)
+          return {};
+        OpOperandVector result;
+        result.reserve(numOperands - numInputsAndOutputs);
+        llvm::transform(
+          this->getOperation()->getOpOperands()
+            .drop_front(numInputsAndOutputs),
+          std::back_inserter(result),
+          [](OpOperand &opOperand) {return &opOperand;});
+        return result;
       }]
     >
   ];
 
   let extraClassDeclaration = [{
+    /// Returns the value that expresses the shape of the output in terms of
+    /// shape of the input operands where possible.
+    LogicalResult reifyResultShapes(OpBuilder &b,
+        mlir::ReifiedRankedShapedTypeDims &reifiedReturnShapes);
+
     //========================================================================//
     // Helper functions to mutate the `operand_segment_sizes` attribute.
     // These are useful when cloning and changing operand types.

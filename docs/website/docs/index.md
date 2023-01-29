@@ -23,7 +23,7 @@ IREE supports importing from a variety of ML frameworks:
 - [x] TensorFlow
 - [x] TensorFlow Lite
 - [x] JAX
-- [ ] PyTorch (planned)
+- [x] PyTorch
 - [ ] ONNX (hoped for)
 
 The IREE compiler tools run on :fontawesome-brands-linux: Linux,
@@ -33,8 +33,8 @@ and can generate efficient code for a variety of runtime platforms:
 - [x] Linux
 - [x] Windows
 - [x] Android
-- [ ] macOS (planned)
-- [ ] iOS (planned)
+- [x] macOS
+- [x] iOS
 - [x] Bare metal
 - [ ] WebAssembly (planned)
 
@@ -60,7 +60,8 @@ to low-level parallel pipelined hardware/API like
 dense computation on the hardware in the form of hardware/API-specific binaries
 like [SPIR-V](https://www.khronos.org/spir/).
 
-![IREE Architecture](assets/images/iree_architecture.svg)
+![IREE Architecture](assets/images/iree_architecture_dark.svg#gh-dark-mode-only)
+![IREE Architecture](assets/images/iree_architecture.svg#gh-light-mode-only)
 
 ## Workflow overview
 
@@ -73,7 +74,7 @@ general steps:
     Develop your program using one of the [supported frameworks](./getting-started/#supported-frameworks), then run your model
     using one of IREE's import tools.
 
-2. **Select your [deployment configuration](./deployment-configurations)**
+2. **Select your [deployment configuration](./deployment-configurations/)**
 
     Identify your target platform, accelerator(s), and other constraints.
 
@@ -94,6 +95,7 @@ formats:
 * [TensorFlow](getting-started/tensorflow.md)
 * [TensorFlow Lite](getting-started/tflite.md)
 * [JAX](getting-started/jax.md)
+* [PyTorch](getting-started/pytorch.md)
 
 ### Selecting deployment configurations
 
@@ -120,7 +122,7 @@ associated scheduling logic.
 For example, compiling for
 [GPU execution](deployment-configurations/gpu-vulkan.md) using Vulkan generates
 SPIR-V kernels and Vulkan API calls. For
-[CPU execution](deployment-configurations/cpu-dylib.md), native code with
+[CPU execution](deployment-configurations/cpu.md), native code with
 static or dynamic linkage and the associated function calls are generated.
 
 ### Running models
@@ -135,7 +137,7 @@ IREE offers a low level C API, as well as several specialized sets of
 ## Communication channels
 
 *   :fontawesome-brands-github:
-    [GitHub issues](https://github.com/google/iree/issues): Feature requests,
+    [GitHub issues](https://github.com/iree-org/iree/issues): Feature requests,
     bugs, and other work tracking
 *   :fontawesome-brands-discord:
     [IREE Discord server](https://discord.gg/26P4xW4): Daily development
@@ -147,17 +149,17 @@ IREE offers a low level C API, as well as several specialized sets of
 
 IREE is in the early stages of development and is not yet ready for broad
 adoption. Check out the
-[long-term design roadmap](https://github.com/google/iree/blob/main/docs/developers/design_roadmap.md)
+[long-term design roadmap](https://github.com/iree-org/iree/blob/main/docs/developers/design_roadmap.md)
 to get a sense of where we're headed.
 
 We plan on a quarterly basis using [OKRs](https://en.wikipedia.org/wiki/OKR).
 Review our latest
-[objectives](https://github.com/google/iree/blob/main/docs/developers/objectives.md) to
+[objectives](https://github.com/iree-org/iree/blob/main/docs/developers/objectives.md) to
 see what we're up to.
 
-We use [GitHub Projects](https://github.com/google/iree/projects) to track
+We use [GitHub Projects](https://github.com/iree-org/iree/projects) to track
 progress on IREE components and specific efforts and
-[GitHub Milestones](https://github.com/google/iree/milestones) to track the
+[GitHub Milestones](https://github.com/iree-org/iree/milestones) to track the
 work associated with plans for each quarter.
 
 [^1]:

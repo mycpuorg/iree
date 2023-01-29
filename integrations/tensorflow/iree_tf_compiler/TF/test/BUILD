@@ -8,7 +8,6 @@ load("//build_tools/bazel:iree_lit_test.bzl", "iree_lit_test_suite")
 load("//build_tools/bazel:enforce_glob.bzl", "enforce_glob")
 
 package(
-    default_visibility = ["//visibility:public"],
     features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
@@ -20,7 +19,6 @@ iree_lit_test_suite(
             "convert_to_mhlo.mlir",
             "direct_lowering.mlir",
             "lower_global_tensors.mlir",
-            "lower_global_tensors_complex.mlir",
             "lower_global_tensors_invalid.mlir",
             "propagate_resource_casts.mlir",
             "saved_model_to_iree_abi.mlir",

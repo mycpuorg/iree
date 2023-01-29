@@ -11,9 +11,11 @@ include(CMakeParseArguments)
 # CMake function to imitate Bazel's c_embed_data rule.
 #
 # Parameters:
+# PACKAGE: Name of the package (overrides actual path)
 # NAME: Name of target (see Note).
 # SRCS: List of source files to embed (non-absolute paths will be resolved
 #     relative to CMAKE_CURRENT_SRC_DIR).
+# INCLUDES: Include directories to add to dependencies
 # GENERATED_SRCS: List of generated source files to embed.
 # C_FILE_OUTPUT: The C implementation file to output.
 # H_FILE_OUTPUT: The H header file to output.
@@ -31,8 +33,8 @@ function(iree_c_embed_data)
   cmake_parse_arguments(
     _RULE
     "PUBLIC;TESTONLY;FLATTEN"
-    "NAME;IDENTIFIER;STRIP_PREFIX;C_FILE_OUTPUT;H_FILE_OUTPUT"
-    "SRCS;GENERATED_SRCS"
+    "PACKAGE;NAME;IDENTIFIER;STRIP_PREFIX;C_FILE_OUTPUT;H_FILE_OUTPUT"
+    "DEPS;SRCS;GENERATED_SRCS;INCLUDES"
     ${ARGN}
   )
 
@@ -53,27 +55,25 @@ function(iree_c_embed_data)
   if(DEFINED _RULE_STRIP_PREFIX)
     list(APPEND _ARGS "--strip_prefix=${_RULE_STRIP_PREFIX}")
   endif()
-  if(${_RULE_FLATTEN})
+  if(_RULE_FLATTEN)
     list(APPEND _ARGS "--flatten")
   endif()
 
-  foreach(SRC ${_RULE_SRCS})
-    if(IS_ABSOLUTE "${SRC}")
-      list(APPEND _ARGS "${SRC}")
+  foreach(_SRC ${_RULE_SRCS})
+    if(IS_ABSOLUTE "${_SRC}")
+      list(APPEND _ARGS "${_SRC}")
     else()
-      list(APPEND _ARGS "${CMAKE_CURRENT_SOURCE_DIR}/${SRC}")
+      list(APPEND _ARGS "${CMAKE_CURRENT_SOURCE_DIR}/${_SRC}")
     endif()
-  endforeach(SRC)
-  foreach(SRC ${_RULE_GENERATED_SRCS})
-    list(APPEND _ARGS "${SRC}")
-  endforeach(SRC)
-
-  iree_get_executable_path(_EXE_PATH generate_embed_data)
+  endforeach(_SRC)
+  foreach(_SRC ${_RULE_GENERATED_SRCS})
+    list(APPEND _ARGS "${_SRC}")
+  endforeach(_SRC)
 
   add_custom_command(
     OUTPUT "${_RULE_H_FILE_OUTPUT}" "${_RULE_C_FILE_OUTPUT}"
-    COMMAND ${_EXE_PATH} ${_ARGS}
-    DEPENDS ${_EXE_PATH} ${_RULE_SRCS} ${_RULE_GENERATED_SRCS}
+    COMMAND generate_embed_data ${_ARGS}
+    DEPENDS generate_embed_data ${_RULE_SRCS} ${_RULE_GENERATED_SRCS}
   )
 
   if(_RULE_TESTONLY)
@@ -84,9 +84,12 @@ function(iree_c_embed_data)
   endif()
 
   iree_cc_library(
+    PACKAGE ${_RULE_PACKAGE}
     NAME ${_RULE_NAME}
     HDRS "${_RULE_H_FILE_OUTPUT}"
     SRCS "${_RULE_C_FILE_OUTPUT}"
+    DEPS "${_RULE_DEPS}"
+    INCLUDES ${_RULE_INCLUDES}
     "${_PUBLIC_ARG}"
     "${_TESTONLY_ARG}"
   )

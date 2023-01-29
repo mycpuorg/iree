@@ -39,11 +39,13 @@ typedef struct iree_sample_state_t {
   iree_runtime_call_t call;
 } iree_sample_state_t;
 
-iree_status_t create_bytecode_module(iree_vm_module_t** out_module) {
+iree_status_t create_bytecode_module(iree_vm_instance_t* instance,
+                                     iree_vm_module_t** out_module) {
   const struct iree_file_toc_t* module_file_toc = iree_static_mnist_create();
   iree_const_byte_span_t module_data =
       iree_make_const_byte_span(module_file_toc->data, module_file_toc->size);
-  return iree_vm_bytecode_module_create(module_data, iree_allocator_null(),
+  return iree_vm_bytecode_module_create(instance, module_data,
+                                        iree_allocator_null(),
                                         iree_allocator_system(), out_module);
 }
 
@@ -53,8 +55,7 @@ iree_sample_state_t* setup_sample() {
       iree_allocator_system(), sizeof(iree_sample_state_t), (void**)&state);
 
   iree_runtime_instance_options_t instance_options;
-  iree_runtime_instance_options_initialize(IREE_API_VERSION_LATEST,
-                                           &instance_options);
+  iree_runtime_instance_options_initialize(&instance_options);
   // Note: no call to iree_runtime_instance_options_use_all_available_drivers().
 
   if (iree_status_is_ok(status)) {
@@ -69,7 +70,6 @@ iree_sample_state_t* setup_sample() {
 
   iree_runtime_session_options_t session_options;
   iree_runtime_session_options_initialize(&session_options);
-  iree_runtime_session_t* session = NULL;
   if (iree_status_is_ok(status)) {
     status = iree_runtime_session_create_with_device(
         state->instance, &session_options, state->device,
@@ -77,7 +77,8 @@ iree_sample_state_t* setup_sample() {
   }
 
   if (iree_status_is_ok(status)) {
-    status = create_bytecode_module(&state->module);
+    status = create_bytecode_module(
+        iree_runtime_instance_vm_instance(state->instance), &state->module);
   }
   if (iree_status_is_ok(status)) {
     status = iree_runtime_session_append_module(state->session, state->module);
@@ -119,14 +120,15 @@ int run_sample(iree_sample_state_t* state, float* image_data) {
 
   iree_hal_buffer_view_t* arg_buffer_view = NULL;
   iree_hal_dim_t buffer_shape[] = {1, 28, 28, 1};
-  iree_hal_memory_type_t input_memory_type =
-      IREE_HAL_MEMORY_TYPE_HOST_LOCAL | IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE;
   if (iree_status_is_ok(status)) {
     status = iree_hal_buffer_view_allocate_buffer(
-        iree_hal_device_allocator(state->device), buffer_shape,
-        IREE_ARRAYSIZE(buffer_shape), IREE_HAL_ELEMENT_TYPE_FLOAT_32,
-        IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR, input_memory_type,
-        IREE_HAL_BUFFER_USAGE_DISPATCH | IREE_HAL_BUFFER_USAGE_TRANSFER,
+        iree_hal_device_allocator(state->device), IREE_ARRAYSIZE(buffer_shape),
+        buffer_shape, IREE_HAL_ELEMENT_TYPE_FLOAT_32,
+        IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
+        (iree_hal_buffer_params_t){
+            .type = IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL,
+            .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
+        },
         iree_make_const_byte_span((void*)image_data, sizeof(float) * 28 * 28),
         &arg_buffer_view);
   }
@@ -151,9 +153,10 @@ int run_sample(iree_sample_state_t* state, float* image_data) {
   // confidence values for each digit in [0, 9].
   float predictions[1 * 10] = {0.0f};
   if (iree_status_is_ok(status)) {
-    status =
-        iree_hal_buffer_read_data(iree_hal_buffer_view_buffer(ret_buffer_view),
-                                  0, predictions, sizeof(predictions));
+    status = iree_hal_device_transfer_d2h(
+        state->device, iree_hal_buffer_view_buffer(ret_buffer_view), 0,
+        predictions, sizeof(predictions), IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT,
+        iree_infinite_timeout());
   }
   iree_hal_buffer_view_release(ret_buffer_view);
 

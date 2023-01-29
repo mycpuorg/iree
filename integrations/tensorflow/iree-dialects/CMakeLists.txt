@@ -22,7 +22,7 @@ include_directories(SYSTEM ${MLIR_GENERATED_INCLUDE_DIR})
 include_directories(SYSTEM ${IREE_DIALECTS_SOURCE_DIR}/include)
 
 function(iree_dialects_target_includes target)
-  set(_dirs
+  set(_DIRS
     $<BUILD_INTERFACE:${MLIR_INCLUDE_DIR}>
     $<BUILD_INTERFACE:${MLIR_GENERATED_INCLUDE_DIR}>
     $<BUILD_INTERFACE:${IREE_DIALECTS_SOURCE_DIR}/include>
@@ -33,16 +33,15 @@ function(iree_dialects_target_includes target)
   # target, when present, is just used for compilation and does not
   # contribute to the interface properties.
   # TODO: Normalize this upstream.
-  target_include_directories(${target} PUBLIC ${_dirs})
+  target_include_directories(${target} PUBLIC ${_DIRS})
   if(TARGET obj.${target})
-    target_include_directories(obj.${target} PRIVATE ${_dirs})
+    target_include_directories(obj.${target} PRIVATE ${_DIRS})
   endif()
 endfunction()
 
 # Configure CMake and tablegen.
 list(APPEND CMAKE_MODULE_PATH ${MLIR_MAIN_SRC_DIR}/cmake/modules)
 list(APPEND CMAKE_MODULE_PATH ${LLVM_MAIN_SRC_DIR}/cmake)
-set(MLIR_TABLEGEN_EXE mlir-tblgen)
 
 include(TableGen)
 include(AddLLVM)
@@ -59,7 +58,6 @@ endif()
 
 add_subdirectory(include)
 add_subdirectory(lib)
-add_subdirectory(resources)
 add_subdirectory(test)
 add_subdirectory(tools)
 

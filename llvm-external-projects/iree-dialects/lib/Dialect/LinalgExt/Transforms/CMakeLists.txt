@@ -1,25 +1,34 @@
-add_mlir_library(IREELinalgExtPasses
-  ConvertToLoops.cpp
-  PadContractionToBlockSize.cpp
-  Passes.cpp
+add_mlir_library(IREELinalgExtTransforms
+  CodegenStrategy.cpp
+  ForeachThreadToAsync.cpp
+  ForeachThreadToSequentialFor.cpp
+  Fusion.cpp
   Tiling.cpp
+  Transforms.cpp
+  Utils.cpp
 
+  PARTIAL_SOURCES_INTENDED
   DEPENDS
-  IREELinalgExtTransformsPassesIncGen
+  mlir-headers
+  IREELinalgExtDialect
 
   LINK_LIBS PUBLIC
-  IREEInputDialect
   IREELinalgExtDialect
-  MLIRAffine
+
+  MLIRAffineToStandard
+  MLIRAsyncDialect
+  MLIRSCFToControlFlow
+  MLIRLinalgToLLVM
+  MLIRDialectUtils
+  MLIRVectorToLLVM
+  MLIRMathToLLVM
+  MLIRMemRefToLLVM
   MLIRIR
-  MLIRLinalg
+  MLIRMathDialect
+  MLIRLinalgDialect
   MLIRLinalgTransforms
-  MLIRMath
-  MLIRMemRef
   MLIRPass
-  MLIRSCF
-  MLIRStandard
-  MLIRSupport
-  MLIRTensor
+  MLIRSCFDialect
+  MLIRTensorTransforms
   MLIRTransforms
 )

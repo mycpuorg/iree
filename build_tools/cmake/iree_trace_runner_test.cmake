@@ -16,16 +16,12 @@ include(CMakeParseArguments)
 #   SRC: mlir source file to be compiled to an IREE module.
 #   TARGET_BACKEND: target backend to compile for.
 #   DRIVER: driver to run the module with.
-#   COMPILER_FLAGS: additional flags to pass to the compiler. Bytecode
-#       translation and backend flags are passed automatically.
+#   COMPILER_FLAGS: additional flags to pass to the compiler. Bytecode output
+#       format and backend flags are passed automatically.
 #   RUNNER_ARGS: additional args to pass to the trace-runner program. The driver
 #       and input file flags are passed automatically.
 #   LABELS: Additional labels to apply to the test. The package path and
 #       "driver=${DRIVER}" are added automatically.
-#   OPT_TOOL: Defaulting to iree-opt. Tool used to preprocess the source files
-#       if OPT_FLAGS is specified.
-#   OPT_FLAGS: If specified, source files are preprocessed with OPT_TOOL with
-#       these flags.
 #   TRACE_RUNNER: trace-runner program to run.
 #   TRACE: trace file input to the trace-runner program.
 #   MODULE_FILE_NAME: specifies the absolute path to the filename to use for the
@@ -39,15 +35,15 @@ function(iree_trace_runner_test)
   endif()
 
   # See comment in iree_check_test about this condition.
-  if(NOT IREE_BUILD_COMPILER AND NOT CMAKE_CROSSCOMPILING)
+  if(NOT IREE_BUILD_COMPILER AND NOT IREE_HOST_BIN_DIR)
     return()
   endif()
 
   cmake_parse_arguments(
     _RULE
     ""
-    "NAME;SRC;TRACE;TARGET_BACKEND;DRIVER;OPT_TOOL;TRACE_RUNNER;MODULE_FILE_NAME"
-    "COMPILER_FLAGS;RUNNER_ARGS;LABELS;OPT_FLAGS;TARGET_CPU_FEATURES"
+    "NAME;SRC;TRACE;TARGET_BACKEND;DRIVER;TRACE_RUNNER;MODULE_FILE_NAME"
+    "COMPILER_FLAGS;RUNNER_ARGS;LABELS;TARGET_CPU_FEATURES"
     ${ARGN}
   )
 
@@ -67,24 +63,8 @@ function(iree_trace_runner_test)
       "${_RULE_TARGET_BACKEND}"
     FLAGS
       ${_RULE_COMPILER_FLAGS}
-    OPT_TOOL
-      ${_RULE_OPT_TOOL}
-    OPT_FLAGS
-      ${_RULE_OPT_FLAGS}
     TARGET_CPU_FEATURES
       ${_RULE_TARGET_CPU_FEATURES}
-  )
-
-  # iree_bytecode_module does not define a target, only a custom command.
-  # We need to create a target that depends on the command to ensure the
-  # module gets built.
-  # TODO(b/146898896): Do this in iree_bytecode_module and avoid having to
-  # reach into the internals.
-  set(_MODULE_TARGET_NAME "${_NAME}_module")
-  add_custom_target(
-    "${_MODULE_TARGET_NAME}"
-     DEPENDS
-       "${_RULE_MODULE_FILE_NAME}"
   )
 
   # A target specifically for the test. We could combine this with the above,
@@ -92,9 +72,11 @@ function(iree_trace_runner_test)
   add_custom_target("${_NAME}" ALL)
   add_dependencies(
     "${_NAME}"
-    "${_MODULE_TARGET_NAME}"
+    "${_NAME}_module"
     "${_RULE_TRACE_RUNNER}"
   )
+
+  add_dependencies(iree-test-deps "${_NAME}")
 
   iree_native_test(
     NAME
@@ -103,11 +85,10 @@ function(iree_trace_runner_test)
       "${_RULE_DRIVER}"
     SRC
       "${_RULE_TRACE_RUNNER}"
-    TEST_INPUT_FILE_ARG
-      ${_RULE_TRACE}
     DATA
       ${_MODULE_FILE_NAME}
     ARGS
+      "{{${_RULE_TRACE}}}"
       ${_RULE_RUNNER_ARGS}
     LABELS
       ${_RULE_LABELS}
@@ -134,16 +115,12 @@ endfunction()
 #   GENERATOR_ARGS: additional args to pass to the generator program.
 #   TARGET_BACKEND: target backend to compile for.
 #   DRIVER: driver to run the module with.
-#   COMPILER_FLAGS: additional flags to pass to the compiler. Bytecode
-#       translation and backend flags are passed automatically.
+#   COMPILER_FLAGS: additional flags to pass to the compiler. Bytecode output
+#       format and backend flags are passed automatically.
 #   RUNNER_ARGS: additional args to pass to the trace-runner program. The driver
 #       and input file flags are passed automatically.
 #   LABELS: Additional labels to apply to the test. The package path and
 #       "driver=${DRIVER}" are added automatically.
-#   OPT_TOOL: Defaulting to iree-opt. Tool used to preprocess the source files
-#       if OPT_FLAGS is specified.
-#   OPT_FLAGS: If specified, source files are preprocessed with OPT_TOOL with
-#       these flags.
 #   TRACE_RUNNER: trace-runner program to run.
 #   TARGET_CPU_FEATURES: If specified, a string passed as argument to
 #       --iree-llvm-target-cpu-features.
@@ -153,7 +130,7 @@ function(iree_single_backend_generated_trace_runner_test)
   endif()
 
   # Copied from iree_check_test. Refer to the comment there.
-  if(NOT IREE_BUILD_COMPILER AND NOT CMAKE_CROSSCOMPILING)
+  if(NOT IREE_BUILD_COMPILER AND NOT IREE_HOST_BIN_DIR)
     return()
   endif()
 
@@ -167,8 +144,8 @@ function(iree_single_backend_generated_trace_runner_test)
   cmake_parse_arguments(
     _RULE
     ""
-    "NAME;GENERATOR;TARGET_BACKEND;DRIVER;OPT_TOOL;TRACE_RUNNER"
-    "GENERATOR_ARGS;COMPILER_FLAGS;RUNNER_ARGS;LABELS;OPT_FLAGS;TARGET_CPU_FEATURES"
+    "NAME;GENERATOR;TARGET_BACKEND;DRIVER;TRACE_RUNNER"
+    "GENERATOR_ARGS;COMPILER_FLAGS;RUNNER_ARGS;LABELS;TARGET_CPU_FEATURES"
     ${ARGN}
   )
 
@@ -187,7 +164,7 @@ function(iree_single_backend_generated_trace_runner_test)
   if(NOT DEFINED IREE_TARGET_BACKEND_${_NORMALIZED_TARGET_BACKEND})
     message(SEND_ERROR "Unknown backend '${_RULE_TARGET_BACKEND}'. Check IREE_TARGET_BACKEND_* options.")
   endif()
-  if(DEFINED IREE_HOST_BINARY_ROOT)
+  if(IREE_HOST_BIN_DIR)
     # If we're not building the host tools from source under this configuration,
     # such as when cross compiling, then we can't easily check for which
     # compiler target backends are enabled. Just assume all are enabled and only
@@ -210,7 +187,7 @@ function(iree_single_backend_generated_trace_runner_test)
   list(APPEND _GENERATOR_STANDARD_FLAGS "--output_code=${_SRC}")
   list(APPEND _GENERATOR_STANDARD_FLAGS "--output_trace=${_TRACE}")
   list(APPEND _GENERATOR_STANDARD_FLAGS "--module_path=${_MODULE_FILE_NAME}")
-  if (_RULE_TARGET_CPU_FEATURES)
+  if(_RULE_TARGET_CPU_FEATURES)
     list(APPEND _GENERATOR_STANDARD_FLAGS "--requirements=${_RULE_TARGET_CPU_FEATURES}")
   endif()
   list(APPEND _GENERATOR_OUTPUT "${_TRACE}")
@@ -254,10 +231,6 @@ function(iree_single_backend_generated_trace_runner_test)
       ${_RULE_RUNNER_ARGS}
     LABELS
       ${_RULE_LABELS}
-    OPT_TOOL
-      ${_RULE_OPT_TOOL}
-    OPT_FLAGS
-      ${_RULE_OPT_FLAGS}
     TARGET_CPU_FEATURES
       ${_RULE_TARGET_CPU_FEATURES}
   )
@@ -294,16 +267,12 @@ endfunction()
 #       TARGET_BACKENDS argument (due to cmake limitations they are separate list
 #       arguments). The lengths must exactly match. If no backends or drivers are
 #       specified, a test will be generated for every supported pair.
-#   COMPILER_FLAGS: additional flags to pass to the compiler. Bytecode
-#       translation and backend flags are passed automatically.
+#   COMPILER_FLAGS: additional flags to pass to the compiler. Bytecode output
+#       format and backend flags are passed automatically.
 #   RUNNER_ARGS: additional args to pass to the trace-runner program. The driver
 #       and input file flags are passed automatically.
 #   LABELS: Additional labels to apply to the test. The package path and
 #       "driver=${DRIVER}" are added automatically.
-#   OPT_TOOL: Defaulting to iree-opt. Tool used to preprocess the source files
-#       if OPT_FLAGS is specified.
-#   OPT_FLAGS: If specified, source files are preprocessed with OPT_TOOL with
-#       these flags.
 #   TRACE_RUNNER: trace-runner program to run.
 #   TARGET_CPU_FEATURES_VARIANTS: list of target cpu features variants. Only used
 #       for drivers that vary based on the target CPU features. For each list
@@ -319,14 +288,14 @@ function(iree_generated_trace_runner_test)
   cmake_parse_arguments(
     _RULE
     ""
-    "NAME;GENERATOR;OPT_TOOL;TRACE_RUNNER"
-    "TARGET_BACKENDS;DRIVERS;GENERATOR_ARGS;COMPILER_FLAGS;RUNNER_ARGS;LABELS;OPT_FLAGS;TARGET_CPU_FEATURES_VARIANTS"
+    "NAME;GENERATOR;TRACE_RUNNER"
+    "TARGET_BACKENDS;DRIVERS;GENERATOR_ARGS;COMPILER_FLAGS;RUNNER_ARGS;LABELS;TARGET_CPU_FEATURES_VARIANTS"
     ${ARGN}
   )
 
   if(NOT DEFINED _RULE_TARGET_BACKENDS AND NOT DEFINED _RULE_DRIVERS)
-    set(_RULE_TARGET_BACKENDS "vmvx" "vulkan-spirv" "dylib-llvm-aot")
-    set(_RULE_DRIVERS "vmvx" "vulkan" "dylib")
+    set(_RULE_TARGET_BACKENDS "vmvx" "vulkan-spirv" "llvm-cpu")
+    set(_RULE_DRIVERS "local-task" "vulkan" "local-task")
   endif()
 
   list(LENGTH _RULE_TARGET_BACKENDS _TARGET_BACKEND_COUNT)
@@ -341,16 +310,14 @@ function(iree_generated_trace_runner_test)
   foreach(_INDEX RANGE "${_MAX_INDEX}")
     list(GET _RULE_TARGET_BACKENDS ${_INDEX} _TARGET_BACKEND)
     list(GET _RULE_DRIVERS ${_INDEX} _DRIVER)
-    if (_TARGET_BACKEND STREQUAL "dylib-llvm-aot" AND _RULE_TARGET_CPU_FEATURES_VARIANTS)
+    if((_TARGET_BACKEND IN_LIST IREE_TARGET_BACKENDS_SUPPORTING_TARGET_CPU_FEATURES) AND _RULE_TARGET_CPU_FEATURES_VARIANTS)
       set(_TARGET_CPU_FEATURES_VARIANTS "${_RULE_TARGET_CPU_FEATURES_VARIANTS}")
     else()
       set(_TARGET_CPU_FEATURES_VARIANTS "default")
     endif()
     foreach(_TARGET_CPU_FEATURES_LIST_ELEM IN LISTS _TARGET_CPU_FEATURES_VARIANTS)
-      process_target_cpu_features("${_TARGET_CPU_FEATURES_LIST_ELEM}" _ENABLED _TARGET_CPU_FEATURES _TARGET_CPU_FEATURES_SUFFIX _TARGET_PASS_OPTIONS)
-      string(REPLACE "#pass_options_variant#" "${_TARGET_PASS_OPTIONS}" _PROCESSED_OPT_FLAGS "${_RULE_OPT_FLAGS}")
-      string(REPLACE "#pass_options_variant#" "${_TARGET_PASS_OPTIONS}" _PROCESSED_COMPILER_FLAGS "${_RULE_COMPILER_FLAGS}")
-      if (NOT _ENABLED)
+      process_target_cpu_features("${_TARGET_CPU_FEATURES_LIST_ELEM}" _ENABLED _TARGET_CPU_FEATURES _TARGET_CPU_FEATURES_SUFFIX)
+      if(NOT _ENABLED)
         # The current entry is disabled on the target CPU architecture.
         continue()
       endif()
@@ -368,15 +335,11 @@ function(iree_generated_trace_runner_test)
         DRIVER
           ${_DRIVER}
         COMPILER_FLAGS
-          ${_PROCESSED_COMPILER_FLAGS}
+          ${_RULE_COMPILER_FLAGS}
         RUNNER_ARGS
           ${_RULE_RUNNER_ARGS}
         LABELS
           ${_RULE_LABELS}
-        OPT_TOOL
-          ${_RULE_OPT_TOOL}
-        OPT_FLAGS
-          ${_PROCESSED_OPT_FLAGS}
         TARGET_CPU_FEATURES
           ${_TARGET_CPU_FEATURES}
       )

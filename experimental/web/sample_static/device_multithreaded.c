@@ -6,8 +6,8 @@
 
 #include <emscripten/threading.h>
 
+#include "iree/hal/drivers/local_task/task_device.h"
 #include "iree/hal/local/loaders/static_library_loader.h"
-#include "iree/hal/local/task_device.h"
 #include "iree/task/api.h"
 #include "mnist_static.h"
 
@@ -16,13 +16,10 @@ iree_status_t create_device_with_static_loader(iree_allocator_t host_allocator,
   iree_hal_task_device_params_t params;
   iree_hal_task_device_params_initialize(&params);
 
-  // Load the statically embedded library.
-  const iree_hal_executable_library_header_t** static_library =
-      mnist_linked_llvm_library_query(
-          IREE_HAL_EXECUTABLE_LIBRARY_LATEST_VERSION,
-          /*reserved=*/NULL);
-  const iree_hal_executable_library_header_t** libraries[1] = {static_library};
-
+  // Register the statically linked executable library.
+  const iree_hal_executable_library_query_fn_t libraries[] = {
+      mnist_linked_llvm_cpu_library_query,
+  };
   iree_hal_executable_loader_t* library_loader = NULL;
   iree_status_t status = iree_hal_static_library_loader_create(
       IREE_ARRAYSIZE(libraries), libraries,
@@ -30,9 +27,9 @@ iree_status_t create_device_with_static_loader(iree_allocator_t host_allocator,
       &library_loader);
 
   // Create a task executor.
-  iree_task_executor_t* executor = NULL;
-  iree_task_scheduling_mode_t scheduling_mode = 0;
-  iree_host_size_t worker_local_memory = 0;
+  iree_task_executor_options_t options;
+  iree_task_executor_options_initialize(&options);
+  options.worker_local_memory_size = 0;
   iree_task_topology_t topology;
   iree_task_topology_initialize(&topology);
   iree_task_topology_initialize_from_group_count(
@@ -42,9 +39,9 @@ iree_status_t create_device_with_static_loader(iree_allocator_t host_allocator,
   // INITIAL_MEMORY, or setting Emscripten's ALLOW_MEMORY_GROWTH.
   // iree_task_topology_initialize_from_group_count(
   //     /*group_count=*/emscripten_num_logical_cores(), &topology);
+  iree_task_executor_t* executor = NULL;
   if (iree_status_is_ok(status)) {
-    status = iree_task_executor_create(scheduling_mode, &topology,
-                                       worker_local_memory, host_allocator,
+    status = iree_task_executor_create(options, &topology, host_allocator,
                                        &executor);
   }
   iree_task_topology_deinitialize(&topology);
@@ -58,8 +55,8 @@ iree_status_t create_device_with_static_loader(iree_allocator_t host_allocator,
 
   if (iree_status_is_ok(status)) {
     status = iree_hal_task_device_create(
-        identifier, &params, executor, /*loader_count=*/1, &library_loader,
-        device_allocator, host_allocator, out_device);
+        identifier, &params, /*queue_count=*/1, &executor, /*loader_count=*/1,
+        &library_loader, device_allocator, host_allocator, out_device);
   }
 
   iree_hal_allocator_release(device_allocator);
