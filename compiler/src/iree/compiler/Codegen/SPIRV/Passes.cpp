@@ -44,6 +44,11 @@
 namespace mlir {
 namespace iree_compiler {
 
+static llvm::cl::opt<int> clSPIRVIndexingBits(
+    "iree-spirv-index-bits",
+    llvm::cl::desc("Set the bit width of indices in SPIR-V."),
+    llvm::cl::init(32));
+
 // Allocation callbacks to use with upstream comprehensive bufferization
 static FailureOr<Value> gpuAllocateWorkgroupMemoryFn(OpBuilder &builder,
                                                      Location loc,
@@ -66,7 +71,7 @@ static FailureOr<Value> gpuAllocateFunctionMemoryFn(OpBuilder &builder,
                                                     MemRefType memRefType,
                                                     ValueRange dynamicSizes,
                                                     unsigned alignment) {
-  Optional<unsigned> space =
+  std::optional<unsigned> space =
       spirv::mapVulkanStorageClassToMemorySpace(spirv::StorageClass::Function);
   MemRefType allocType = MemRefType::get(
       memRefType.getShape(), memRefType.getElementType(), {}, *space);
@@ -194,7 +199,10 @@ static void addMemRefLoweringPasses(OpPassManager &pm) {
 
   // Turn multi-dimension memref into one-dimension. This is needed for SPIR-V
   // because we don't use upstream memref descriptors.
+  pm.addNestedPass<func::FuncOp>(createFixupSubspanWithOffsetsPass());
   pm.addPass(createFlattenMemRefSubspanPass());
+  pm.addNestedPass<func::FuncOp>(
+      createSPIRVEraseStorageBufferStaticShapePass());
 }
 
 /// Adds passes to perform the final SPIR-V conversion.
@@ -216,7 +224,7 @@ static void addSPIRVLoweringPasses(OpPassManager &pm, bool enableFastMath) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
-  pm.addPass(createConvertToSPIRVPass(enableFastMath));
+  pm.addPass(createConvertToSPIRVPass(enableFastMath, clSPIRVIndexingBits));
 
   auto getTargetEnv = [](spirv::ModuleOp moduleOp) {
     return getSPIRVTargetEnvAttr(moduleOp);
@@ -342,9 +350,13 @@ void addSPIRVCooperativeMatrixVectorizePassPipeline(OpPassManager &pm,
   nestedModulePM.addPass(createCSEPass());
   nestedModulePM.addNestedPass<func::FuncOp>(createSPIRVVectorizePass());
 
-  if (pipelineDepth > 0)
+  if (pipelineDepth > 0) {
+    PipeliningSchedulingStrategy schedule =
+        storeStage == 0 ? PipeliningSchedulingStrategy::loadStoreStage0
+                        : PipeliningSchedulingStrategy::loadGlobalStage0;
     nestedModulePM.addNestedPass<func::FuncOp>(createGPUPipeliningPass(
-        /*epiloguePeeling=*/true, pipelineDepth, storeStage));
+        /*epiloguePeeling=*/true, pipelineDepth, schedule));
+  }
 }
 
 void addSPIRVMatmulPromoteVectorizePassPipeline(OpPassManager &pm,
@@ -389,8 +401,11 @@ void addSPIRVMatmulPromoteVectorizePassPipeline(OpPassManager &pm,
   nestedModulePM.addNestedPass<func::FuncOp>(
       createOptimizeVectorTransferPass());
 
+  PipeliningSchedulingStrategy schedule =
+      storeStage == 0 ? PipeliningSchedulingStrategy::loadStoreStage0
+                      : PipeliningSchedulingStrategy::loadGlobalStage0;
   nestedModulePM.addNestedPass<func::FuncOp>(createGPUPipeliningPass(
-      /*epiloguePeeling=*/true, pipelineDepth, storeStage));
+      /*epiloguePeeling=*/true, pipelineDepth, schedule));
 
   addLoopMaterializationPasses(nestedModulePM);
 }
@@ -419,6 +434,9 @@ void addSPIRVSubgroupReducePassPipeline(OpPassManager &pm) {
       pm, /*useFuseTensorPadWithConsumerPass=*/true);
 
   auto &nestedModulePM = pm.nest<ModuleOp>();
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      createRematerializeParallelOpsPass());
+  nestedModulePM.addNestedPass<func::FuncOp>(createCanonicalizerPass());
   nestedModulePM.addNestedPass<func::FuncOp>(
       createRemoveSingleIterationLoopPass());
   nestedModulePM.addNestedPass<func::FuncOp>(createGPUTileReductionPass());
@@ -511,6 +529,11 @@ void addSPIRVWinogradVectorizePassPipeline(OpPassManager &pm) {
 void buildSPIRVCodegenPassPipeline(OpPassManager &pm, bool enableFastMath) {
   pm.nest<ModuleOp>().nest<func::FuncOp>().addPass(createTypePropagationPass());
   pm.nest<ModuleOp>().addPass(createBufferizeCopyOnlyDispatchesPass());
+  pm.nest<ModuleOp>().addNestedPass<func::FuncOp>(
+      IREE::LinalgExt::createDecomposeSoftmaxPass());
+  // Temporary solution to avoid large allocations due to softmax lowering.
+  pm.nest<ModuleOp>().addNestedPass<func::FuncOp>(
+      createRematerializeParallelOpsPass());
   pm.addPass(createSPIRVLowerExecutableTargetPass());
 
   addMemRefLoweringPasses(pm.nest<ModuleOp>());

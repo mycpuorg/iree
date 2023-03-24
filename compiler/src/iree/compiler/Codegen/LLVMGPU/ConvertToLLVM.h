@@ -10,7 +10,17 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 
 namespace mlir {
+namespace gpu {
+enum class AddressSpace : uint32_t;
+}
 namespace iree_compiler {
+
+/// Verifies compatibility of the module for application of the LLVM
+/// conversion patterns. If not compatible, an error is issued and the
+/// pass should be failed.
+/// This is primarily used to eagerly reject modules with features not
+/// (yet) supported by the NVVM conversions.
+LogicalResult verifyLLVMConversionCompatibility(ModuleOp moduleOp);
 
 void populateLLVMConversionPatterns(MLIRContext *context,
                                     RewritePatternSet &patterns,
@@ -25,6 +35,11 @@ void populateLowerHALInterfaceOp(RewritePatternSet &patterns);
 void populateConvertSharedMemoryAllocOps(RewritePatternSet &patterns);
 
 void ConvertToDynamicSharedMemory(ModuleOp moduleOp);
+
+using MemorySpaceMapping =
+    std::function<unsigned(gpu::AddressSpace gpuAddressSpace)>;
+void populateGpuMemorySpaceAttributeConversions(
+    TypeConverter &typeConverter, const MemorySpaceMapping &mapping);
 
 }  // namespace iree_compiler
 }  // namespace mlir

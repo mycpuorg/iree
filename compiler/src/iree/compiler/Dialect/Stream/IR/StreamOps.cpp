@@ -745,7 +745,7 @@ Value ResourceSubviewOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getSource());
 }
 
-::llvm::Optional<unsigned> ResourceSubviewOp::getTiedResultOperandIndex(
+::std::optional<unsigned> ResourceSubviewOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // source
 }
@@ -760,6 +760,9 @@ IREE::Stream::ResourceSubviewOp ResourceSubviewOp::findSubviewOp(Value value) {
     auto *definingOp = value.getDefiningOp();
     if (!definingOp) {
       // Defined as a block argument - stop walk.
+      break;
+    } else if (isa<IREE::Stream::TimelineOpInterface>(definingOp)) {
+      // Don't traverse timeline ops as time travel isn't possible (yet).
       break;
     } else if (auto subviewOp =
                    dyn_cast<IREE::Stream::ResourceSubviewOp>(definingOp)) {
@@ -794,7 +797,7 @@ Value TensorImportOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getSource());
 }
 
-::llvm::Optional<unsigned> TensorImportOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TensorImportOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // source
 }
@@ -821,7 +824,7 @@ Value TensorExportOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getSource());
 }
 
-::llvm::Optional<unsigned> TensorExportOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TensorExportOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // source
 }
@@ -958,7 +961,7 @@ Value TensorUpdateOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> TensorUpdateOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TensorUpdateOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -985,7 +988,7 @@ Value TensorFillOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> TensorFillOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TensorFillOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1034,7 +1037,7 @@ Value TensorStoreOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> TensorStoreOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TensorStoreOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1140,7 +1143,7 @@ Value BuiltinFillI64Op::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> BuiltinFillI64Op::getTiedResultOperandIndex(
+::std::optional<unsigned> BuiltinFillI64Op::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1310,7 +1313,7 @@ Value AsyncFillOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> AsyncFillOp::getTiedResultOperandIndex(
+::std::optional<unsigned> AsyncFillOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1344,7 +1347,7 @@ Value AsyncUpdateOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> AsyncUpdateOp::getTiedResultOperandIndex(
+::std::optional<unsigned> AsyncUpdateOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1387,7 +1390,7 @@ Value AsyncCopyOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> AsyncCopyOp::getTiedResultOperandIndex(
+::std::optional<unsigned> AsyncCopyOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1428,7 +1431,7 @@ static const char *getCollectiveParamKeyword(Attribute opAttr) {
 
 static ParseResult parseCollectiveParam(
     OpAsmParser &parser, Attribute opAttr,
-    Optional<OpAsmParser::UnresolvedOperand> &optionalParamValue) {
+    std::optional<OpAsmParser::UnresolvedOperand> &optionalParamValue) {
   const char *keyword = getCollectiveParamKeyword(opAttr);
   if (!keyword) return success();  // optional
   OpAsmParser::UnresolvedOperand paramValue;
@@ -1482,7 +1485,7 @@ Value AsyncCollectiveOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> AsyncCollectiveOp::getTiedResultOperandIndex(
+::std::optional<unsigned> AsyncCollectiveOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1550,7 +1553,7 @@ Value AsyncStoreOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> AsyncStoreOp::getTiedResultOperandIndex(
+::std::optional<unsigned> AsyncStoreOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1752,13 +1755,13 @@ std::pair<unsigned, unsigned> AsyncExecuteOp::getTiedResultsIndexAndLength() {
 }
 
 OperandRange AsyncExecuteOp::getSuccessorEntryOperands(
-    Optional<unsigned> index) {
+    std::optional<unsigned> index) {
   assert(index && index.value() == 0 && "invalid region index");
   return getResourceOperands();
 }
 
 void AsyncExecuteOp::getSuccessorRegions(
-    Optional<unsigned> index, ArrayRef<Attribute> operands,
+    std::optional<unsigned> index, ArrayRef<Attribute> operands,
     SmallVectorImpl<RegionSuccessor> &regions) {
   // Unconditional control flow into the region and back to the parent, so
   // return the correct RegionSuccessor purely based on the index being None or
@@ -1906,13 +1909,13 @@ LogicalResult AsyncConcurrentOp::verify() {
 }
 
 OperandRange AsyncConcurrentOp::getSuccessorEntryOperands(
-    Optional<unsigned> index) {
+    std::optional<unsigned> index) {
   assert(index && index.value() == 0 && "invalid region index");
   return getResourceOperands();
 }
 
 void AsyncConcurrentOp::getSuccessorRegions(
-    Optional<unsigned> index, ArrayRef<Attribute> operands,
+    std::optional<unsigned> index, ArrayRef<Attribute> operands,
     SmallVectorImpl<RegionSuccessor> &regions) {
   // Unconditional control flow into the region and back to the parent, so
   // return the correct RegionSuccessor purely based on the index being None or
@@ -2119,27 +2122,64 @@ LogicalResult CmdDispatchOp::verify() {
 LogicalResult CmdDispatchOp::verifySymbolUses(
     SymbolTableCollection &symbolTable) {
   Operation *op = getOperation();
-  auto exportOp =
-      symbolTable.lookupNearestSymbolFrom<IREE::Stream::ExecutableExportOp>(
-          op, getEntryPoint());
-  if (!exportOp) {
-    // TODO(benvanik): there are a lot of tests that are assuming this is not
-    // verified. We'll need to go add dummy executables for all of them. Today
-    // we just bail on the verifier if the symbol isn't found.
-    //
-    // Should be:
-    //   return op->emitOpError() << "undefined entry point: " << entry_point();
-    return success();
+  auto entryPointRefs = getEntryPointRefs();
+  if (entryPointRefs.empty()) {
+    return emitOpError() << "at least one entry point must be defined";
   }
+  for (auto entryPointAttr : entryPointRefs) {
+    auto exportOp =
+        symbolTable.lookupNearestSymbolFrom<IREE::Stream::ExecutableExportOp>(
+            op, entryPointAttr);
+    if (!exportOp) {
+      // TODO(benvanik): there are a lot of tests that are assuming this is not
+      // verified. We'll need to go add dummy executables for all of them. Today
+      // we just bail on the verifier if the symbol isn't found.
+      //
+      // Should be:
+      //   return op->emitOpError() << "undefined entry point: " <<
+      //   entry_point();
+      return success();
+    }
 
-  // Verify that the workload parameters captured match the target export.
-  if (failed(verifyDispatchWorkload(op, exportOp, getWorkload()))) {
-    return failure();
+    // Verify that the workload parameters captured match the target export.
+    if (failed(verifyDispatchWorkload(op, exportOp, getWorkload()))) {
+      return failure();
+    }
+
+    // TODO(benvanik): verify that the target function has matching operands.
   }
-
-  // TODO(benvanik): verify that the target function has matching operands.
-
   return success();
+}
+
+static ParseResult parseDispatchEntryPoints(OpAsmParser &parser,
+                                            ArrayAttr &entryPointAttrsArray) {
+  SmallVector<Attribute> entryPointAttrs;
+  if (succeeded(parser.parseOptionalLBrace())) {
+    do {
+      SymbolRefAttr entryPointAttr;
+      if (failed(parser.parseAttribute(entryPointAttr))) return failure();
+      entryPointAttrs.push_back(entryPointAttr);
+    } while (succeeded(parser.parseOptionalComma()));
+    if (failed(parser.parseRBrace())) return failure();
+  } else {
+    SymbolRefAttr entryPointAttr;
+    if (failed(parser.parseAttribute(entryPointAttr))) return failure();
+    entryPointAttrs.push_back(entryPointAttr);
+  }
+  entryPointAttrsArray = parser.getBuilder().getArrayAttr(entryPointAttrs);
+  return success();
+}
+
+static void printDispatchEntryPoints(OpAsmPrinter &p, Operation *op,
+                                     ArrayAttr entryPointAttrs) {
+  if (entryPointAttrs.size() == 1) {
+    p.printAttribute(entryPointAttrs.getValue().front());
+  } else {
+    p << '{';
+    llvm::interleaveComma(entryPointAttrs, p.getStream(),
+                          [&](Attribute attr) { p.printAttribute(attr); });
+    p << '}';
+  }
 }
 
 static ParseResult parseDispatchResources(
@@ -2317,13 +2357,14 @@ LogicalResult CmdExecuteOp::verify() {
   return success();
 }
 
-OperandRange CmdExecuteOp::getSuccessorEntryOperands(Optional<unsigned> index) {
+OperandRange CmdExecuteOp::getSuccessorEntryOperands(
+    std::optional<unsigned> index) {
   assert(index && index.value() == 0 && "invalid region index");
   return getResourceOperands();
 }
 
 void CmdExecuteOp::getSuccessorRegions(
-    Optional<unsigned> index, ArrayRef<Attribute> operands,
+    std::optional<unsigned> index, ArrayRef<Attribute> operands,
     SmallVectorImpl<RegionSuccessor> &regions) {
   // Unconditional control flow into the region and back to the parent, so
   // return the correct RegionSuccessor purely based on the index being None or
@@ -2391,7 +2432,7 @@ LogicalResult CmdSerialOp::verify() {
 }
 
 void CmdSerialOp::getSuccessorRegions(
-    Optional<unsigned> index, ArrayRef<Attribute> operands,
+    std::optional<unsigned> index, ArrayRef<Attribute> operands,
     SmallVectorImpl<RegionSuccessor> &regions) {
   // Unconditional control flow into the region and back to the parent, so
   // return the correct RegionSuccessor purely based on the index being None or
@@ -2416,7 +2457,7 @@ LogicalResult CmdConcurrentOp::verify() {
 }
 
 void CmdConcurrentOp::getSuccessorRegions(
-    Optional<unsigned> index, ArrayRef<Attribute> operands,
+    std::optional<unsigned> index, ArrayRef<Attribute> operands,
     SmallVectorImpl<RegionSuccessor> &regions) {
   // Unconditional control flow into the region and back to the parent, so
   // return the correct RegionSuccessor purely based on the index being None or
@@ -2455,7 +2496,7 @@ Value TimepointBarrierOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getResource());
 }
 
-::llvm::Optional<unsigned> TimepointBarrierOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TimepointBarrierOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};
 }
@@ -2503,7 +2544,7 @@ LogicalResult TimepointAwaitOp::verify() {
   return success();
 }
 
-::llvm::Optional<unsigned> TimepointAwaitOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TimepointAwaitOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {resultIndex};
 }
@@ -2620,7 +2661,7 @@ LogicalResult BindingSubspanOp::verify() {
 //===----------------------------------------------------------------------===//
 
 MutableOperandRange ReturnOp::getMutableSuccessorOperands(
-    Optional<unsigned> index) {
+    std::optional<unsigned> index) {
   return getOperandsMutable();
 }
 
@@ -2629,7 +2670,7 @@ MutableOperandRange ReturnOp::getMutableSuccessorOperands(
 //===----------------------------------------------------------------------===//
 
 MutableOperandRange YieldOp::getMutableSuccessorOperands(
-    Optional<unsigned> index) {
+    std::optional<unsigned> index) {
   return getResourceOperandsMutable();
 }
 

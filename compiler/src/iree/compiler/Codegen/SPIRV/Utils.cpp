@@ -47,7 +47,7 @@ bool isInWorkgroupMemory(MemRefType memrefType) {
   return false;
 }
 
-llvm::Optional<int> getSPIRVSubgroupSize(func::FuncOp funcOp) {
+std::optional<int> getSPIRVSubgroupSize(func::FuncOp funcOp) {
   auto moduleOp = funcOp->getParentOfType<ModuleOp>();
   llvm::StringMap<IREE::HAL::ExecutableExportOp> exportOps =
       getAllEntryPoints(moduleOp);
@@ -62,11 +62,7 @@ llvm::Optional<int> getSPIRVSubgroupSize(func::FuncOp funcOp) {
 
 FailureOr<SmallVector<int64_t>> getSPIRVTileSize(func::FuncOp funcOp,
                                                  int tilingLevel) {
-  SmallVector<Operation *> computeOps;
-  if (failed(getComputeOps(funcOp, computeOps))) {
-    return funcOp.emitOpError("failed to get compute ops");
-  }
-
+  SmallVector<Operation *> computeOps = getComputeOps(funcOp);
   auto config = getLoweringConfig(computeOps);
   if (failed(config)) {
     return funcOp.emitOpError("failed to get lowering configuration");

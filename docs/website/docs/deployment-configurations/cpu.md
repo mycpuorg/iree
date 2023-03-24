@@ -45,8 +45,9 @@ python -m pip install iree-compiler
     `iree-compile` is installed to your python module installation path. If you
     pip install with the user mode, it is under `${HOME}/.local/bin`, or
     `%APPDATA%Python` on Windows. You may want to include the path in your
-    system's `PATH` environment variable.
-    ``` shell
+    system's `PATH` environment variable:
+
+    ```shell
     export PATH=${HOME}/.local/bin:${PATH}
     ```
 
@@ -97,9 +98,9 @@ where `iree_input.mlir` is the imported program.
 
 !!! tip
 
-    The `--iree-llvm-target-triple=` flag tells the compiler to generate code
+    The `--iree-llvmcpu-target-triple=` flag tells the compiler to generate code
     for a specific type of CPU. You can see the list of supported targets with
-    `iree-compile --iree-llvm-list-targets`, or omit the flag to let LLVM infer
+    `iree-compile --iree-llvmcpu-list-targets`, or omit the flag to let LLVM infer
     the triple from your host machine (e.g. `x86_64-linux-gnu`).
 
 ### Get IREE runtime with local CPU HAL driver
@@ -139,7 +140,6 @@ it expects one 224x224 RGB image. We are feeding in an image with all 0 values
 here for brevity, see `iree-run-module --help` for the format to specify
 concrete values.
 
-
 <!-- TODO(??): deployment options -->
 
 <!-- TODO(??): measuring performance -->
@@ -155,4 +155,3 @@ concrete values.
 [python-bindings]: ../bindings/python.md
 [tf-hub-mobilenetv2]: https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification
 [tf-import]: ../getting-started/tensorflow.md
-[tflite-import]: ../getting-started/tensorflow-lite.md

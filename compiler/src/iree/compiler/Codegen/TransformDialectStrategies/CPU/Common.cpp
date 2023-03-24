@@ -31,7 +31,8 @@ using namespace mlir;
 using iree_compiler::cpu::CPUModel;
 using iree_compiler::cpu::ReductionConfig;
 using iree_compiler::cpu::ReductionStrategy;
-using iree_compiler::IREE::transform_dialect::ForeachThreadToWorkgroupOp;
+using iree_compiler::IREE::transform_dialect::ApplyPatternsOpPatterns;
+using iree_compiler::IREE::transform_dialect::ForallToWorkgroupOp;
 using transform::LowerVectorsOp;
 using transform::MatchOp;
 using transform::SplitHandlesOp;
@@ -53,20 +54,35 @@ using transform_ext::StructuredOpMatcher;
 std::pair<Value, Value> mlir::iree_compiler::cpu::buildCommonTrailingStrategy(
     ImplicitLocOpBuilder &b, Value variantH,
     const vector::LowerVectorsOptions &lowerVectorsOpts) {
-  // Step N-2. Bufferize and drop HAL descriptor from memref ops.
   Value funcH = b.create<MatchOp>(variantH, func::FuncOp::getOperationName());
+
+  // Step N-5. Fold tensor.empty to avoid large allocations.
+  ApplyPatternsOpPatterns configuration;
+  configuration.foldTensorEmptyExtract = true;
+
+  // Step N-4. Perform a pass of canonicalization + enabling after tiling.
+  funcH = mlir::iree_compiler::buildCanonicalizationAndEnablingTransforms(
+      b, configuration, funcH);
   funcH = iree_compiler::buildVectorize(b, funcH);
+
+  // Step N-3. Perform a pass of canonicalization + enabling after vectorization
+  // as well as hoisting subset operations such as vector.transfer_read/write.
+  funcH = mlir::iree_compiler::buildCanonicalizationAndEnablingTransforms(
+      b, configuration, funcH);
+  funcH = iree_compiler::buildHoisting(b, funcH);
+
+  // Step N-2. Bufferize and drop HAL descriptor from memref ops.
   variantH = iree_compiler::buildBufferize(b, variantH);
 
   // Step N-1. Post-bufferization mapping to blocks only.
   // Need to match again since bufferize invalidated all handles.
   // TODO: assumes a single func::FuncOp to transform, may need hardening.
   funcH = b.create<MatchOp>(variantH, func::FuncOp::getOperationName());
-  funcH = b.create<ForeachThreadToWorkgroupOp>(funcH);
-  auto pdlOperation = pdl::OperationType::get(b.getContext());
+  b.create<ForallToWorkgroupOp>(funcH);
 
   // Step N. Lower vectors.
   // TODO: Control the lowering to vectors.
+  auto pdlOperation = pdl::OperationType::get(b.getContext());
   funcH = b.create<LowerVectorsOp>(pdlOperation, funcH, lowerVectorsOpts);
   return std::make_pair(variantH, funcH);
 }
@@ -101,10 +117,11 @@ static ReductionConfig getReductionConfig(
 LogicalResult iree_compiler::cpu::matchAndSetReductionStrategy(
     func::FuncOp entryPoint, linalg::LinalgOp op, const CPUModel &cpuModel) {
   // 1. Match a reduction and surrounding ops.
-  StructuredOpMatcher reduction, fill, leading, trailing;
+  StructuredOpMatcher *reduction;
   transform_ext::MatchedReductionCaptures captures;
-  makeReductionMatcher(reduction, fill, leading, trailing, captures);
-  if (!matchPattern(op, reduction)) return failure();
+  transform_ext::MatcherContext matcherContext;
+  makeReductionMatcher(matcherContext, reduction, captures);
+  if (!matchPattern(op, *reduction)) return failure();
 
   // 2. Construct the configuration and the strategy builder.
   // TODO: Generalize along the HW axis.

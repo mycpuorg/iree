@@ -109,7 +109,7 @@ struct FoldBufferViewCreateSubspan
     rewriter.setInsertionPoint(op);
     bool needsUpdate = false;
     auto newSourceBuffer = op.getSourceBuffer();
-    auto newSourceOffset = op.getSourceOffset();
+    auto newSourceOffset = op.getSourceOffset().cast<Value>();
     if (auto subspanOp = dyn_cast_or_null<BufferSubspanOp>(
             op.getSourceBuffer().getDefiningOp())) {
       newSourceBuffer = subspanOp.getSourceBuffer();
@@ -203,7 +203,7 @@ struct FoldCommandBufferFillBufferSubspans
     rewriter.setInsertionPoint(op);
     bool needsUpdate = false;
     auto newTargetBuffer = op.getTargetBuffer();
-    auto newTargetOffset = op.getTargetOffset();
+    auto newTargetOffset = op.getTargetOffset().cast<Value>();
     if (auto subspanOp = dyn_cast_or_null<BufferSubspanOp>(
             op.getTargetBuffer().getDefiningOp())) {
       newTargetBuffer = subspanOp.getSourceBuffer();
@@ -242,7 +242,7 @@ struct FoldCommandBufferCopyBufferSubspans
     rewriter.setInsertionPoint(op);
     bool needsUpdate = false;
     auto newSourceBuffer = op.getSourceBuffer();
-    auto newSourceOffset = op.getSourceOffset();
+    auto newSourceOffset = op.getSourceOffset().cast<Value>();
     if (auto subspanOp = dyn_cast_or_null<BufferSubspanOp>(
             op.getSourceBuffer().getDefiningOp())) {
       newSourceBuffer = subspanOp.getSourceBuffer();
@@ -252,7 +252,7 @@ struct FoldCommandBufferCopyBufferSubspans
       needsUpdate = true;
     }
     auto newTargetBuffer = op.getTargetBuffer();
-    auto newTargetOffset = op.getTargetOffset();
+    auto newTargetOffset = op.getTargetOffset().cast<Value>();
     if (auto subspanOp = dyn_cast_or_null<BufferSubspanOp>(
             op.getTargetBuffer().getDefiningOp())) {
       newTargetBuffer = subspanOp.getSourceBuffer();
@@ -773,7 +773,7 @@ struct ElideEmptyFenceJoin : public OpRewritePattern<FenceJoinOp> {
 
 // Produces a deduplicated and null-elided operand list.
 // Returns std::nullopt if nothing changed.
-static Optional<std::vector<Value>> deduplicateFenceOperands(
+static std::optional<std::vector<Value>> deduplicateFenceOperands(
     ValueRange operands) {
   SetVector<Value> newOperands;
   for (auto operand : operands) {

@@ -60,10 +60,6 @@ echo "Building test deps"
 echo "------------------"
 "$CMAKE_BIN" --build "${BUILD_DIR}" --target iree-test-deps -- -k 0
 
-echo "Building sample deps"
-echo "------------------"
-"$CMAKE_BIN" --build "${BUILD_DIR?}" --target iree-sample-deps -- -k 0
-
 if (( IREE_USE_CCACHE == 1 )); then
   ccache --show-stats
 fi
@@ -71,7 +67,7 @@ fi
 # Disable actually running GPU tests. This tends to yield TSan reports that are
 # specific to one's particular GPU driver and therefore hard to reproduce across
 # machines and often un-actionable anyway.
-# See e.g. https://github.com/iree-org/iree/issues/9393
+# See e.g. https://github.com/openxla/iree/issues/9393
 export IREE_VULKAN_DISABLE=1
 export IREE_CUDA_DISABLE=1
 

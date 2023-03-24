@@ -46,8 +46,8 @@ func.func @cmdCopy(%arg0: !stream.resource<transient>, %arg1: index, %arg2: !str
 
 // CHECK-LABEL: @cmdCollective
 func.func @cmdCollective(%arg0: !stream.resource<transient>, %arg1: index, %arg2: !stream.resource<transient>, %arg3: index) -> !stream.timepoint {
-  // CHECK: %[[CHANNEL:.+]] = stream.channel.create
-  %channel = stream.channel.create : !stream.channel
+  // CHECK: %[[CHANNEL:.+]] = stream.channel.default
+  %channel = stream.channel.default : !stream.channel
 
   %c0 = arith.constant 0 : index
   %c128 = arith.constant 128 : index
@@ -106,11 +106,11 @@ func.func @cmdDispatch(%arg0: !stream.resource<transient>, %arg1: index, %arg2: 
   %c5 = arith.constant 5 : index
   %c128 = arith.constant 128 : index
   %0 = stream.cmd.execute with(%arg0 as %arg4: !stream.resource<transient>{%arg1}, %arg2 as %arg5: !stream.resource<external>{%arg3}) {
-    //      CHECK: stream.cmd.dispatch @executable::@dispatch[%c1, %c2, %c3](%c4, %c5 : index, index) {
+    //      CHECK: stream.cmd.dispatch {@executable::@dispatch0, @executable::@dispatch1}[%c1, %c2, %c3](%c4, %c5 : index, index) {
     // CHECK-NEXT:   ro %arg4[%c0 for %c128] : !stream.resource<transient>{%arg1},
     // CHECK-NEXT:   wo %arg5[%c0 for %c128] : !stream.resource<external>{%arg3}
     // CHECK-NEXT: }
-    stream.cmd.dispatch @executable::@dispatch[%c1, %c2, %c3](%c4, %c5 : index, index) {
+    stream.cmd.dispatch {@executable::@dispatch0, @executable::@dispatch1}[%c1, %c2, %c3](%c4, %c5 : index, index) {
       ro %arg4[%c0 for %c128] : !stream.resource<transient>{%arg1},
       wo %arg5[%c0 for %c128] : !stream.resource<external>{%arg3}
     }

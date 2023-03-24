@@ -746,8 +746,9 @@ struct CmdCopyOpPattern
 // NOTE: this relies on the enums being the same today. Ew.
 static IREE::HAL::CollectiveAttr convertCollectiveAttr(
     IREE::Stream::CollectiveAttr sourceAttr) {
-  auto convertReductionOp = [](Optional<IREE::Stream::CollectiveReductionOp> op)
-      -> Optional<IREE::HAL::CollectiveReductionOp> {
+  auto convertReductionOp =
+      [](std::optional<IREE::Stream::CollectiveReductionOp> op)
+      -> std::optional<IREE::HAL::CollectiveReductionOp> {
     if (!op.has_value()) return std::nullopt;
     return static_cast<IREE::HAL::CollectiveReductionOp>(op.value());
   };
@@ -806,6 +807,16 @@ struct CmdCollectiveOpPattern
   }
 };
 
+// Returns a hal.device.switch match expression that selects the given export.
+static Attribute getExportConditionAttr(
+    IREE::HAL::ExecutableExportOp exportOp) {
+  // TODO(benvanik): customizable selection logic. Today this just checks
+  // whether the variant target is supported but we can also allow
+  // specialization of entry points based on dispatch site parameters.
+  auto variantOp = exportOp->getParentOfType<IREE::HAL::ExecutableVariantOp>();
+  return variantOp.getTarget().getMatchExpression();
+}
+
 struct CmdDispatchOpPattern
     : public StreamConversionPattern<IREE::Stream::CmdDispatchOp> {
   using StreamConversionPattern::StreamConversionPattern;
@@ -821,34 +832,21 @@ struct CmdDispatchOpPattern
     auto device = rewriter.create<IREE::HAL::CommandBufferDeviceOp>(
         loc, rewriter.getType<IREE::HAL::DeviceType>(), commandBuffer);
 
-    // Get the handle to the executable that is compatible with our device.
-    auto executableOp =
-        cast<IREE::HAL::ExecutableOp>(SymbolTable::lookupNearestSymbolFrom(
-            dispatchOp, dispatchOp.getEntryPoint().getRootReference()));
-    assert(executableOp && "dispatch target executable op not found");
-
     // Ask each target backend to record their dispatch logic.
     IREE::HAL::DeviceSwitchRewriter switchRewriter(loc,
                                                    /*resultTypes=*/TypeRange{},
                                                    device, rewriter);
-    for (auto variantOp :
-         executableOp.getOps<IREE::HAL::ExecutableVariantOp>()) {
-      auto exportOps = variantOp.getOps<IREE::HAL::ExecutableExportOp>();
-      auto exportIt =
-          llvm::find_if(exportOps, [&](IREE::HAL::ExecutableExportOp op) {
-            return op.getNameAttr() ==
-                   dispatchOp.getEntryPoint().getLeafReference();
-          });
-      if (exportIt == exportOps.end()) {
-        return variantOp.emitError()
-               << "hal.executable.variant is missing the flow entry point for "
-               << dispatchOp.getEntryPoint();
-      }
-      auto exportOp = *exportIt;
+    dispatchOp.forEachEntryPointAttr([&](SymbolRefAttr entryPointAttr) {
+      // NOTE: slow lookup!
+      auto exportOp =
+          SymbolTable::lookupNearestSymbolFrom<IREE::HAL::ExecutableExportOp>(
+              dispatchOp, entryPointAttr);
+      assert(exportOp && "dispatch target export not found");
 
-      auto *region = switchRewriter.addConditionRegion(
-          variantOp.getTarget().getMatchExpression());
-      auto &entryBlock = region->front();
+      // Setup the case condition for the entry point.
+      auto *caseRegion =
+          switchRewriter.addConditionRegion(getExportConditionAttr(exportOp));
+      auto &entryBlock = caseRegion->front();
       auto caseBuilder = OpBuilder::atBlockBegin(&entryBlock);
 
       // Record push constants and buffer bindings.
@@ -856,18 +854,14 @@ struct CmdDispatchOpPattern
                        exportOp.getLayout(), caseBuilder);
 
       // Dispatch with a target-specific workgroup count.
-      auto exportSymRef =
-          SymbolRefAttr::get(caseBuilder.getContext(), executableOp.getName(),
-                             {SymbolRefAttr::get(exportOp->getParentOp()),
-                              SymbolRefAttr::get(exportOp)});
       auto caseWorkgroupCount = exportOp.calculateWorkgroupCount(
           loc, device, adaptor.getWorkload(), caseBuilder);
       caseBuilder.create<IREE::HAL::CommandBufferDispatchSymbolOp>(
-          loc, commandBuffer, exportSymRef, caseWorkgroupCount[0],
+          loc, commandBuffer, entryPointAttr, caseWorkgroupCount[0],
           caseWorkgroupCount[1], caseWorkgroupCount[2]);
 
       caseBuilder.create<IREE::HAL::ReturnOp>(loc);
-    }
+    });
     switchRewriter.build();
 
     rewriter.eraseOp(dispatchOp);
@@ -1005,8 +999,8 @@ struct CmdExecuteOpPattern
     // Begin/end recording and inline the execution region between them.
     auto endOp =
         rewriter.create<IREE::HAL::CommandBufferFinalizeOp>(loc, commandBuffer);
-    rewriter.mergeBlockBefore(&executeOp.getBody().front(), endOp,
-                              adaptor.getResourceOperands());
+    rewriter.inlineBlockBefore(&executeOp.getBody().front(), endOp,
+                               adaptor.getResourceOperands());
 
     // Gather wait/signal fence, which are optional.
     Value waitFence =
@@ -1039,7 +1033,7 @@ struct CmdSerialOpPattern
                                 OpBuilder::atBlockBegin(&bodyBlock));
 
     // Inline the serial execution region.
-    rewriter.mergeBlockBefore(&serialOp.getBody().front(), serialOp);
+    rewriter.inlineBlockBefore(&serialOp.getBody().front(), serialOp);
     rewriter.eraseOp(serialOp);
     return success();
   }
@@ -1053,7 +1047,7 @@ struct CmdConcurrentOpPattern
       ConversionPatternRewriter &rewriter) const override {
     // Inline the concurrent execution region.
     // TODO(benvanik): split barriers (event set/wait) when nesting.
-    rewriter.mergeBlockBefore(&concurrentOp.getBody().front(), concurrentOp);
+    rewriter.inlineBlockBefore(&concurrentOp.getBody().front(), concurrentOp);
     rewriter.eraseOp(concurrentOp);
     return success();
   }
@@ -1197,6 +1191,24 @@ struct ChannelCreateOpPattern
       }
       return neg1I32;
     };
+    Value id = adaptor.getId();
+    if (!id) {
+      id = rewriter.create<IREE::Util::NullOp>(
+          createOp.getLoc(), rewriter.getType<IREE::Util::BufferType>());
+    }
+    Value group =
+        adaptor.getGroupAttr()
+            ? rewriter
+                  .create<IREE::Util::BufferConstantOp>(
+                      createOp.getLoc(),
+                      /*name=*/StringAttr{}, /*value=*/adaptor.getGroupAttr(),
+                      /*alignment=*/IntegerAttr{}, /*mime_type=*/StringAttr{})
+                  .getResult()
+            : rewriter
+                  .create<IREE::Util::NullOp>(
+                      createOp.getLoc(),
+                      rewriter.getType<IREE::Util::BufferType>())
+                  .getResult();
     Value rank =
         adaptor.getRank()
             ? rewriter.create<arith::IndexCastOp>(
@@ -1209,7 +1221,8 @@ struct ChannelCreateOpPattern
             : getDefault();
     rewriter.replaceOpWithNewOp<IREE::HAL::ChannelCreateOp>(
         createOp, rewriter.getType<IREE::HAL::ChannelType>(), device,
-        queueAffinity, rank, count);
+        queueAffinity, /*flags=*/rewriter.getI32IntegerAttr(0), id, group, rank,
+        count);
     return success();
   }
 };

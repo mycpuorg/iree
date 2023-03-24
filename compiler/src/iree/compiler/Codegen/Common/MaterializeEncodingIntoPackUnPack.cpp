@@ -56,9 +56,10 @@ static FailureOr<SmallVector<OpFoldResult>> getPackedDimsForDispatchTensor(
   auto innerTileSizes = getInnerTileSizesOfr(
       builder, loc, boundTensorType, *encodingInfo, materializeEncodingValueFn);
   if (failed(innerTileSizes)) return failure();
-  SmallVector<OpFoldResult> convertedTargetShape = PackOp::getResultShape(
-      builder, loc, targetShape, *innerTileSizes, encodingInfo->innerDimsPos,
-      encodingInfo->outerDimsPerm);
+  SmallVector<OpFoldResult> convertedTargetShape =
+      tensor::PackOp::getResultShape(builder, loc, targetShape, *innerTileSizes,
+                                     encodingInfo->innerDimsPos,
+                                     encodingInfo->outerDimsPerm);
   return convertedTargetShape;
 }
 
@@ -253,10 +254,6 @@ IREE::LinalgExt::MaterializeEncodingInfo chooseEncodingInfoForMatmul(
       break;
     }
     case (MatmulOperandRole::RHS): {
-      encodingInfo.innerTileSizes = {tileParams.K, tileParams.N};
-      break;
-    }
-    case (MatmulOperandRole::RHS_TRANSPOSE): {
       encodingInfo.innerTileSizes = {tileParams.N, tileParams.K};
       encodingInfo.innerDimsPos = {1, 0};
       encodingInfo.outerDimsPerm = {1, 0};
@@ -274,22 +271,20 @@ IREE::LinalgExt::MaterializeEncodingInfo chooseEncodingInfoForMatmul(
   return encodingInfo;
 }
 
-Optional<TensorEncoding> getEncoding(RankedTensorType tensorType) {
+std::optional<TensorEncoding> getEncoding(RankedTensorType tensorType) {
   auto encodingAttr = tensorType.getEncoding().dyn_cast_or_null<EncodingAttr>();
   if (!encodingAttr) return std::nullopt;
   return encodingAttr.getEncoding().getValue();
 }
 
-Optional<MatmulType> getMatmulType(TensorEncoding encoding) {
+std::optional<MatmulType> getMatmulType(TensorEncoding encoding) {
   switch (encoding) {
     case TensorEncoding::MATMUL_F32F32F32_LHS:
     case TensorEncoding::MATMUL_F32F32F32_RHS:
-    case TensorEncoding::MATMUL_F32F32F32_RHS_TRANSPOSE:
     case TensorEncoding::MATMUL_F32F32F32_RESULT:
       return MatmulType::F32F32F32;
     case TensorEncoding::MATMUL_I8I8I32_LHS:
     case TensorEncoding::MATMUL_I8I8I32_RHS:
-    case TensorEncoding::MATMUL_I8I8I32_RHS_TRANSPOSE:
     case TensorEncoding::MATMUL_I8I8I32_RESULT:
       return MatmulType::I8I8I32;
     default:
@@ -297,7 +292,7 @@ Optional<MatmulType> getMatmulType(TensorEncoding encoding) {
   }
 }
 
-Optional<MatmulOperandRole> getMatmulOperandRole(TensorEncoding encoding) {
+std::optional<MatmulOperandRole> getMatmulOperandRole(TensorEncoding encoding) {
   switch (encoding) {
     case TensorEncoding::MATMUL_F32F32F32_LHS:
     case TensorEncoding::MATMUL_I8I8I32_LHS:
@@ -305,9 +300,6 @@ Optional<MatmulOperandRole> getMatmulOperandRole(TensorEncoding encoding) {
     case TensorEncoding::MATMUL_F32F32F32_RHS:
     case TensorEncoding::MATMUL_I8I8I32_RHS:
       return MatmulOperandRole::RHS;
-    case TensorEncoding::MATMUL_F32F32F32_RHS_TRANSPOSE:
-    case TensorEncoding::MATMUL_I8I8I32_RHS_TRANSPOSE:
-      return MatmulOperandRole::RHS_TRANSPOSE;
     case TensorEncoding::MATMUL_F32F32F32_RESULT:
     case TensorEncoding::MATMUL_I8I8I32_RESULT:
       return MatmulOperandRole::RESULT;
@@ -342,7 +334,7 @@ void adjustTileSizesToNarrowStaticShape(MaterializeEncodingInfo &encodingInfo,
 FailureOr<MaterializeEncodingValueInfo>
 chooseDynamicEncodingInfoVMVXMicrokernels(RankedTensorType tensorType,
                                           OpBuilder &builder, Location loc) {
-  Optional<TensorEncoding> encoding = getEncoding(tensorType);
+  std::optional<TensorEncoding> encoding = getEncoding(tensorType);
   if (!encoding) return failure();
   auto matmulType = getMatmulType(*encoding);
   auto matmulOperandRole = getMatmulOperandRole(*encoding);
@@ -359,8 +351,6 @@ chooseDynamicEncodingInfoVMVXMicrokernels(RankedTensorType tensorType,
     flags |= IREE_UK_FLAG_QUERY_TILE_SIZES_OPERAND_ROLE_LHS;
   } else if (*matmulOperandRole == MatmulOperandRole::RHS) {
     flags |= IREE_UK_FLAG_QUERY_TILE_SIZES_OPERAND_ROLE_RHS;
-  } else if (*matmulOperandRole == MatmulOperandRole::RHS_TRANSPOSE) {
-    flags |= IREE_UK_FLAG_QUERY_TILE_SIZES_OPERAND_ROLE_RHS_TRANSPOSE;
   } else if (*matmulOperandRole == MatmulOperandRole::RESULT) {
     flags |= IREE_UK_FLAG_QUERY_TILE_SIZES_OPERAND_ROLE_RESULT;
   } else {

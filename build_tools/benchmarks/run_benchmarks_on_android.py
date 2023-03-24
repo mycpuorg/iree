@@ -339,7 +339,7 @@ def main(args):
   if args.verbose:
     print(device_info)
 
-  if args.run_config is not None:
+  if args.execution_benchmark_config is not None:
     raise ValueError("Run config option isn't supported yet.")
 
   commit = get_git_commit_hash("HEAD")
@@ -351,11 +351,6 @@ def main(args):
                                             benchmark_suite=benchmark_suite,
                                             benchmark_grace_time=1.0,
                                             verbose=args.verbose)
-
-  if args.continue_from_directory:
-    # Merge in previous benchmarks and captures.
-    benchmark_driver.add_previous_benchmarks_and_captures(
-        args.continue_from_directory)
 
   if args.pin_cpu_freq:
     set_cpu_frequency_scaling_governor("performance")

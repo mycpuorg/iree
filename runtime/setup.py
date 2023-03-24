@@ -377,8 +377,9 @@ setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
     ],
-    url="https://github.com/iree-org/iree",
+    url="https://github.com/openxla/iree",
     python_requires=">=3.7",
     ext_modules=[
         CMakeExtension("iree._runtime"),

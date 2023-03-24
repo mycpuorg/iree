@@ -693,9 +693,10 @@ static LogicalResult applyAsyncDispatchOp(IREE::Stream::AsyncDispatchOp asyncOp,
   }
 
   auto newOp = builder.create<IREE::Stream::CmdDispatchOp>(
-      asyncOp.getLoc(), asyncOp.getWorkload(), asyncOp.getEntryPoint(),
-      newOperands, newResources, newResourceSizes, newResourceOffsets,
-      newResourceLengths, builder.getArrayAttr(newResourceAccesses));
+      asyncOp.getLoc(), asyncOp.getWorkload(),
+      builder.getArrayAttr({asyncOp.getEntryPoint()}), newOperands,
+      newResources, newResourceSizes, newResourceOffsets, newResourceLengths,
+      builder.getArrayAttr(newResourceAccesses));
   newOp->setDialectAttrs(asyncOp->getDialectAttrs());
   asyncOp.erase();
   return success();
@@ -813,7 +814,7 @@ struct TransientAllocation {
 // Performs allocation for all local transients in the execution region (those
 // !stream.resource<transient> values that don't escape). A new allocation op
 // will be inserted using |externalBuilder| and mappings added to |scope|.
-static llvm::Optional<TransientAllocation> allocateLocalTransients(
+static std::optional<TransientAllocation> allocateLocalTransients(
     IREE::Stream::AsyncExecuteOp executeOp, AllocationScope &scope,
     OpBuilder &externalBuilder) {
   // Track which values we've already reserved. This makes it easier to early-
@@ -929,7 +930,7 @@ static bool isOnlyUseYield(Value value) {
 // Extracts stream.async.constant ops from |executeOp| into their own dedicated
 // stream.resource.constants upload op. The uploaded constants will be captured
 // by the region for use within as if they had still existed in there.
-static Optional<ConstantAllocation> extractConstants(
+static std::optional<ConstantAllocation> extractConstants(
     IREE::Stream::AsyncExecuteOp executeOp, OpBuilder &externalBuilder) {
   // Gather all constant ops from the region, if any.
   auto constantOps =

@@ -22,6 +22,7 @@
 set -xeuo pipefail
 
 BUILD_DIR="${1:-${IREE_TARGET_BUILD_DIR:-build-riscv}}"
+BUILD_TYPE="${IREE_BUILD_TYPE:-RelWithDebInfo}"
 RISCV_PLATFORM="${IREE_TARGET_PLATFORM:-linux}"
 RISCV_ARCH="${IREE_TARGET_ARCH:-riscv_64}"
 RISCV_COMPILER_FLAGS="${RISCV_COMPILER_FLAGS:--O3}"
@@ -38,6 +39,7 @@ declare -a args
 args=(
   "-G" "Ninja"
   "-B" "${BUILD_DIR}"
+  "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
   "-DPython3_EXECUTABLE=${IREE_PYTHON3_EXECUTABLE}"
   "-DPYTHON_EXECUTABLE=${IREE_PYTHON3_EXECUTABLE}"
   "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_FILE}"
@@ -116,8 +118,5 @@ else
     echo "Building test deps for RISC-V"
     echo "-----------------------------"
     "${CMAKE_BIN}" --build "${BUILD_DIR}" --target iree-test-deps -- -k 0
-    echo "Building sample deps for RISC-V"
-    echo "------------------"
-    "${CMAKE_BIN}" --build "${BUILD_DIR}" --target iree-sample-deps -- -k 0
   fi
 fi

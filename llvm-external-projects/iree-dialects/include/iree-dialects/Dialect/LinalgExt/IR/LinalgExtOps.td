@@ -482,7 +482,7 @@ def IREELinalgExt_TopkOp : IREELinalgExt_Op<"topk",[
     Value values() {
       return getInputOperand(0)->get();
     }
-    Optional<Value> indices() {
+    std::optional<Value> indices() {
       if (getNumInputs() < 2) {
         return {};
       } else {
@@ -519,10 +519,7 @@ def IREELinalgExt_PackOp : IREELinalgExt_Op<"pack", [
   DeclareOpInterfaceMethods<LinalgExtInterface>,
   DeclareOpInterfaceMethods<TilingInterface,
     ["getIterationDomain",
-     "getLoopIteratorTypes",
-     "generateScalarImplementation",
-     "getResultTilePosition",
-     "getTiledImplementation"]>,
+     "generateScalarImplementation"]>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
 ]>{
   let summary = "pack operation";
@@ -597,7 +594,7 @@ def IREELinalgExt_PackOp : IREELinalgExt_Op<"pack", [
     OpBuilder<(ins "Value":$source, "Value":$output,
       "ArrayRef<int64_t>":$innerDimsPos,
       "ArrayRef<OpFoldResult>":$innerTiles,
-      CArg<"Optional<Value>", "std::nullopt">:$paddingValue,
+      CArg<"std::optional<Value>", "std::nullopt">:$paddingValue,
       CArg<"ArrayRef<int64_t>", "{}">:$outerDimsPerm)>
   ];
 
@@ -689,11 +686,7 @@ def IREELinalgExt_UnPackOp : IREELinalgExt_Op<"unpack", [
   DeclareOpInterfaceMethods<LinalgExtInterface>,
   DeclareOpInterfaceMethods<TilingInterface,
     ["getIterationDomain",
-     "getLoopIteratorTypes",
-     "generateScalarImplementation",
-     "getResultTilePosition",
-     "getTiledImplementation",
-     "generateResultTileValue"]>,
+     "generateScalarImplementation"]>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
 ]>{
   let summary = "unpack operation";
@@ -1135,7 +1128,7 @@ def IREELinalgExt_SoftmaxOp : IREELinalgExt_Op<"softmax",
   );
 
   let builders = [
-    OpBuilder<(ins "ValueRange":$inputs, "ValueRange":$outputs,
+    OpBuilder<(ins "Value":$inputs, "Value":$outputs,
       CArg<"int64_t", "0">:$dimension)>
   ];
 

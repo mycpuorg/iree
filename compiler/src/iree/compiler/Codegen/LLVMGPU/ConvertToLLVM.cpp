@@ -25,6 +25,25 @@
 namespace mlir {
 namespace iree_compiler {
 
+LogicalResult verifyLLVMConversionCompatibility(ModuleOp moduleOp) {
+  LogicalResult compatible = success();
+
+  moduleOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
+    auto memrefType = subspanOp.getType().dyn_cast<MemRefType>();
+    if (memrefType) {
+      Type elType = memrefType.getElementType();
+      if (!elType.isa<FloatType, IntegerType>()) {
+        subspanOp.emitError()
+            << "only integer and floating point element types "
+               "are supported at interface boundary";
+        compatible = failure();
+      }
+    }
+  });
+
+  return compatible;
+}
+
 void ConvertToDynamicSharedMemory(ModuleOp moduleOp) {
   SymbolTableCollection symbolTableCollection;
   // Collect all the adressOfOps to static shared memory globals.
@@ -74,12 +93,10 @@ void ConvertToDynamicSharedMemory(ModuleOp moduleOp) {
         loc, IntegerType::get(builder.getContext(), 64),
         builder.getI64IntegerAttr(offset));
     Value shiftedPtr = builder.create<LLVM::GEPOp>(
-        loc, globalPtr.getType(), globalPtr, ValueRange({zero, offsetValue}));
-    Value castPtr = builder.create<LLVM::BitcastOp>(
-        loc,
-        LLVM::LLVMPointerType::get(globalOp.getType(), global.getAddrSpace()),
-        shiftedPtr);
-    addressOfOp.replaceAllUsesWith(castPtr);
+        loc, globalPtr.getType(),
+        LLVM::LLVMPointerType::get(globalOp.getContext()), globalPtr,
+        ValueRange({zero, offsetValue}));
+    addressOfOp.replaceAllUsesWith(shiftedPtr);
     addressOfOp.erase();
   }
   // Add the amount of shared memory required as an attribute.
@@ -135,7 +152,12 @@ struct ConvertSharedMemAllocOp : public OpRewritePattern<memref::AllocOp> {
 
   LogicalResult matchAndRewrite(memref::AllocOp allocOp,
                                 PatternRewriter &rewriter) const override {
-    if (allocOp.getType().getMemorySpaceAsInt() != 3) return failure();
+    auto addressSpace = allocOp.getType()
+                            .getMemorySpace()
+                            .dyn_cast_or_null<gpu::AddressSpaceAttr>();
+    if (!addressSpace ||
+        addressSpace.getValue() != gpu::GPUDialect::getWorkgroupAddressSpace())
+      return failure();
     ArrayRef<int64_t> shape = allocOp.getType().getShape();
     if (llvm::any_of(shape,
                      [](int64_t dim) { return dim == ShapedType::kDynamic; })) {
@@ -143,7 +165,7 @@ struct ConvertSharedMemAllocOp : public OpRewritePattern<memref::AllocOp> {
     }
 
     uint64_t alignement;
-    if (llvm::Optional<uint64_t> alignementInfo = allocOp.getAlignment()) {
+    if (std::optional<uint64_t> alignementInfo = allocOp.getAlignment()) {
       alignement = alignementInfo.value();
     } else {
       // If no alignment specified align at least to the size of an element.
@@ -243,12 +265,9 @@ class ConvertFunc : public ConvertToLLVMPattern {
     auto argMapping = getKernelArgMapping(funcOp);
     // There may be dead symbols, we pick i32 pointer as default argument type.
     SmallVector<Type, 8> llvmInputTypes(
-        argMapping.size(), LLVM::LLVMPointerType::get(rewriter.getI32Type()));
+        argMapping.size(), LLVM::LLVMPointerType::get(rewriter.getContext()));
     funcOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
-      auto memrefType = subspanOp.getType().cast<MemRefType>();
-      Type elType = memrefType.getElementType();
-      auto llvmType =
-          LLVM::LLVMPointerType::get(elType, memrefType.getMemorySpaceAsInt());
+      auto llvmType = LLVM::LLVMPointerType::get(rewriter.getContext());
       llvmInputTypes[argMapping[SetBinding(subspanOp.getSet(),
                                            subspanOp.getBinding())]] = llvmType;
     });
@@ -357,22 +376,13 @@ class ConvertIREEBindingSubspanOp : public ConvertToLLVMPattern {
                             rewriter.getUnitAttr());
     }
     // Add the byte offset.
-    Value llvmBufferBasei8Ptr = rewriter.create<LLVM::BitcastOp>(
-        loc,
-        LLVM::LLVMPointerType::get(rewriter.getIntegerType(8),
-                                   llvmBufferArg.getType()
-                                       .cast<LLVM::LLVMPointerType>()
-                                       .getAddressSpace()),
-        llvmBufferArg);
+    Value llvmBufferBasePtr = llvmBufferArg;
     if (adaptor.getByteOffset()) {
-      llvmBufferBasei8Ptr = rewriter.create<LLVM::GEPOp>(
-          loc, llvmBufferBasei8Ptr.getType(), llvmBufferBasei8Ptr,
+      auto i8Type = typeConverter->convertType(rewriter.getI8Type());
+      llvmBufferBasePtr = rewriter.create<LLVM::GEPOp>(
+          loc, llvmBufferBasePtr.getType(), i8Type, llvmBufferBasePtr,
           adaptor.getByteOffset());
     }
-    auto llvmPtrType = LLVM::LLVMPointerType::get(
-        memrefType.getElementType(), memrefType.getMemorySpaceAsInt());
-    Value llvmBufferBasePtr =
-        rewriter.create<LLVM::BitcastOp>(loc, llvmPtrType, llvmBufferBasei8Ptr);
     if (memrefType.hasStaticShape()) {
       auto desc = MemRefDescriptor::fromStaticShape(
           rewriter, loc, *getTypeConverter(), memrefType, llvmBufferBasePtr);
@@ -498,6 +508,21 @@ void populateLowerHALInterfaceOp(RewritePatternSet &patterns) {
 
 std::unique_ptr<OperationPass<ModuleOp>> createTestLLVMGPULegalizePass() {
   return std::make_unique<TestLLVMGPULegalizeOpPass>();
+}
+
+static IntegerAttr wrapNumericMemorySpace(MLIRContext *ctx, unsigned space) {
+  return IntegerAttr::get(IntegerType::get(ctx, 64), space);
+}
+
+void populateGpuMemorySpaceAttributeConversions(
+    TypeConverter &typeConverter, const MemorySpaceMapping &mapping) {
+  typeConverter.addTypeAttributeConversion(
+      [mapping](BaseMemRefType type, gpu::AddressSpaceAttr memorySpaceAttr) {
+        gpu::AddressSpace memorySpace = memorySpaceAttr.getValue();
+        unsigned addressSpace = mapping(memorySpace);
+        return wrapNumericMemorySpace(memorySpaceAttr.getContext(),
+                                      addressSpace);
+      });
 }
 
 }  // namespace iree_compiler

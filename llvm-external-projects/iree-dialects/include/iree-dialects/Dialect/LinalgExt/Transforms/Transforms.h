@@ -16,7 +16,7 @@
 namespace mlir {
 namespace scf {
 class ForOp;
-class ForeachThreadOp;
+class ForallOp;
 } // namespace scf
 namespace linalg {
 class LinalgOp;
@@ -30,7 +30,7 @@ namespace LinalgExt {
 struct SwapTilingInterfaceOp : public OpRewritePattern<tensor::ExtractSliceOp> {
   using OpRewritePattern<tensor::ExtractSliceOp>::OpRewritePattern;
 
-  FailureOr<Operation *>
+  FailureOr<TilingResult>
   returningMatchAndRewrite(tensor::ExtractSliceOp sliceOp,
                            PatternRewriter &rewriter) const;
 
@@ -40,33 +40,31 @@ struct SwapTilingInterfaceOp : public OpRewritePattern<tensor::ExtractSliceOp> {
   }
 };
 
-/// Pattern to rewrite a scf::ForEachThreadOp to the async dialect.
-struct ForeachThreadOpToAsyncRewriter
-    : public OpRewritePattern<scf::ForeachThreadOp> {
+/// Pattern to rewrite a scf::ForallOp to the async dialect.
+struct ForallOpToAsyncRewriter : public OpRewritePattern<scf::ForallOp> {
   using OpRewritePattern::OpRewritePattern;
 
   FailureOr<Operation *>
-  returningMatchAndRewrite(scf::ForeachThreadOp foreachThreadOp,
+  returningMatchAndRewrite(scf::ForallOp forallOp,
                            PatternRewriter &rewriter) const;
 
-  LogicalResult matchAndRewrite(scf::ForeachThreadOp foreachThreadOp,
+  LogicalResult matchAndRewrite(scf::ForallOp forallOp,
                                 PatternRewriter &rewriter) const override {
-    return returningMatchAndRewrite(foreachThreadOp, rewriter);
+    return returningMatchAndRewrite(forallOp, rewriter);
   }
 };
 
-/// Pattern to rewrite a ForeachThreadOp to an scf::ForOp.
-struct ForeachThreadOpToScfForRewriter
-    : public OpRewritePattern<scf::ForeachThreadOp> {
+/// Pattern to rewrite a ForallOp to an scf::ForOp.
+struct ForallOpToScfForRewriter : public OpRewritePattern<scf::ForallOp> {
   using OpRewritePattern::OpRewritePattern;
 
   FailureOr<scf::ForOp>
-  returningMatchAndRewrite(scf::ForeachThreadOp foreachThreadOp,
+  returningMatchAndRewrite(scf::ForallOp forallOp,
                            PatternRewriter &rewriter) const;
 
-  LogicalResult matchAndRewrite(scf::ForeachThreadOp foreachThreadOp,
+  LogicalResult matchAndRewrite(scf::ForallOp forallOp,
                                 PatternRewriter &rewriter) const override {
-    return returningMatchAndRewrite(foreachThreadOp, rewriter);
+    return returningMatchAndRewrite(forallOp, rewriter);
   }
 };
 
@@ -347,7 +345,7 @@ struct LinalgBasePromotionPattern : public RewritePattern {
     // the op and deleting the previous op. This
     // needs more investigation.
     rewriter.startRootUpdate(op);
-    Optional<linalg::LinalgOp> promotedOp =
+    std::optional<linalg::LinalgOp> promotedOp =
         promoteSubViews(rewriter, op, options);
     if (!promotedOp) {
       rewriter.cancelRootUpdate(op);
@@ -465,7 +463,7 @@ struct LinalgPaddingPattern
     if (failed(filter.checkAndNotify(rewriter, op)))
       return failure();
     linalg::LinalgPaddingPattern p(op.getContext(), options);
-    auto maybeRes = p.returningMatchAndRewrite(op, rewriter);
+    auto maybeRes = linalg::padAndHoistLinalgOp(rewriter, op, options);
     if (failed(maybeRes))
       return failure();
     filter.replaceLinalgTransformationFilter(rewriter, *maybeRes);
@@ -482,7 +480,8 @@ private:
 FailureOr<linalg::TileLoopNest> tileConsumerAndFuseProducers(
     OpBuilder &b, linalg::LinalgOp consumerOp, ArrayRef<int64_t> tileSizes,
     ArrayRef<int64_t> tileInterchange,
-    const Optional<linalg::LinalgLoopDistributionOptions> &tileDistribution);
+    const std::optional<linalg::LinalgLoopDistributionOptions>
+        &tileDistribution);
 
 } // namespace LinalgExt
 } // namespace IREE

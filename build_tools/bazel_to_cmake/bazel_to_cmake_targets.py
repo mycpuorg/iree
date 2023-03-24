@@ -32,6 +32,9 @@ EXPLICIT_TARGET_MAPPING = {
     "@llvm-project//llvm:X86AsmParser": ["IREELLVMCPUTargetDeps"],
     "@llvm-project//llvm:X86CodeGen": ["IREELLVMCPUTargetDeps"],
 
+    # Clang
+    "@llvm-project//clang": ["${IREE_CLANG_TARGET}"],
+
     # LLD
     "@llvm-project//lld": ["${IREE_LLD_TARGET}"],
     "@llvm-project//lld:COFF": ["lldCOFF"],
@@ -45,6 +48,8 @@ EXPLICIT_TARGET_MAPPING = {
     "@llvm-project//llvm:IPO": ["LLVMipo"],
     "@llvm-project//llvm:FileCheck": ["FileCheck"],
     "@llvm-project//llvm:not": ["not"],
+    "@llvm-project//llvm:llvm-link": ["${IREE_LLVM_LINK_TARGET}"],
+
     # MLIR
     "@llvm-project//mlir:AllPassesAndDialects": ["MLIRAllDialects"],
     "@llvm-project//mlir:DialectUtils": [""],
@@ -60,6 +65,7 @@ EXPLICIT_TARGET_MAPPING = {
     "@llvm-project//mlir:MlirTableGenMain": ["MLIRTableGen"],
     "@llvm-project//mlir:MlirOptLib": ["MLIROptLib"],
     "@llvm-project//mlir:VectorOps": ["MLIRVector"],
+
     # MHLO.
     # TODO: Rework this upstream so that Bazel and CMake rules match up
     # better.
@@ -78,11 +84,6 @@ EXPLICIT_TARGET_MAPPING = {
         "ChloOps",
         "MhloDialect",
     ],
-    "@mlir-hlo//:map_lmhlo_to_scalar_op": [
-        "tensorflow::external_mhlo_includes",
-        "LmhloDialect",  # Unfortunate.
-        "MhloDialect",
-    ],
     "@mlir-hlo//:map_mhlo_to_scalar_op": [
         "tensorflow::external_mhlo_includes",
         "MhloDialect",
@@ -91,12 +92,12 @@ EXPLICIT_TARGET_MAPPING = {
         "tensorflow::external_mhlo_includes",
         "MhloPasses",
         "MhloShapeOpsToStandard",
-        "MhloToArithmeticConversion",
-        "MhloToLhloConversion",
         "MhloToLinalg",
-        "MhloToMemrefConversion",
         "MhloToStandard",
         "StablehloToMhlo",
+        # Note: We deliberately omit some passes that we do not use in IREE,
+        # e.g.: MhloToArithmeticConversion, MhloToLhloConversion, or
+        # MhloToMemrefConversion.
     ],
     "@mlir-hlo//:unfuse_batch_norm": [
         "tensorflow::external_mhlo_includes",

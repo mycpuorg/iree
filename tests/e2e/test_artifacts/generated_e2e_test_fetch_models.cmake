@@ -10,21 +10,21 @@ iree_fetch_artifact(
 
 iree_fetch_artifact(
   NAME
-    "model-0e466f69-91d6-4e50-b62b-a82b6213a231"
+    "model-4a6f545e-1b4e-41a5-9236-792aa578184b"
   SOURCE_URL
-    "https://storage.googleapis.com/iree-model-artifacts/mobile_ssd_v2_float_coco.tflite"
+    "https://storage.googleapis.com/iree-model-artifacts/efficientnet_lite0_int8_2.tflite"
   OUTPUT
-    "${ROOT_ARTIFACTS_DIR}/model_0e466f69-91d6-4e50-b62b-a82b6213a231_MobileSSD_fp32.tflite"
+    "${ROOT_ARTIFACTS_DIR}/model_4a6f545e-1b4e-41a5-9236-792aa578184b_EfficientNet_int8.tflite"
   UNPACK
 )
 
 iree_fetch_artifact(
   NAME
-    "model-5afc3014-d29d-4e88-a840-fbaf678acf2b"
+    "model-73a0402e-271b-4aa8-a6a5-ac05839ca569"
   SOURCE_URL
-    "https://storage.googleapis.com/iree-model-artifacts/posenet.tflite"
+    "https://storage.googleapis.com/iree-model-artifacts/mobilebertsquad.tflite"
   OUTPUT
-    "${ROOT_ARTIFACTS_DIR}/model_5afc3014-d29d-4e88-a840-fbaf678acf2b_PoseNet_fp32.tflite"
+    "${ROOT_ARTIFACTS_DIR}/model_73a0402e-271b-4aa8-a6a5-ac05839ca569_MobileBertSquad_fp16.tflite"
   UNPACK
 )
 
@@ -50,16 +50,6 @@ iree_fetch_artifact(
 
 iree_fetch_artifact(
   NAME
-    "model-73a0402e-271b-4aa8-a6a5-ac05839ca569"
-  SOURCE_URL
-    "https://storage.googleapis.com/iree-model-artifacts/mobilebertsquad.tflite"
-  OUTPUT
-    "${ROOT_ARTIFACTS_DIR}/model_73a0402e-271b-4aa8-a6a5-ac05839ca569_MobileBertSquad_fp16.tflite"
-  UNPACK
-)
-
-iree_fetch_artifact(
-  NAME
     "model-78eab9e5-9ff1-4769-9b55-933c81cc9a0f"
   SOURCE_URL
     "https://storage.googleapis.com/iree-model-artifacts/mobilenet_v1_224_1.0_float.tflite"
@@ -80,11 +70,31 @@ iree_fetch_artifact(
 
 iree_fetch_artifact(
   NAME
+    "model-3dd5a95e-92a9-4486-9062-9a33224f28db"
+  SOURCE_URL
+    "https://storage.googleapis.com/iree-model-artifacts/mobilenet_v2_1.0_224_quantized.tflite"
+  OUTPUT
+    "${ROOT_ARTIFACTS_DIR}/model_3dd5a95e-92a9-4486-9062-9a33224f28db_MobileNetV2_int8.0_224_quantized.tflite"
+  UNPACK
+)
+
+iree_fetch_artifact(
+  NAME
     "model-58855e40-eba9-4a71-b878-6b35e3460244"
   SOURCE_URL
     "https://storage.googleapis.com/iree-model-artifacts/MobileNetV3SmallStaticBatch.tflite"
   OUTPUT
     "${ROOT_ARTIFACTS_DIR}/model_58855e40-eba9-4a71-b878-6b35e3460244_MobileNetV3Small_fp32.tflite"
+  UNPACK
+)
+
+iree_fetch_artifact(
+  NAME
+    "model-0e466f69-91d6-4e50-b62b-a82b6213a231"
+  SOURCE_URL
+    "https://storage.googleapis.com/iree-model-artifacts/mobile_ssd_v2_float_coco.tflite"
+  OUTPUT
+    "${ROOT_ARTIFACTS_DIR}/model_0e466f69-91d6-4e50-b62b-a82b6213a231_MobileSSD_fp32.tflite"
   UNPACK
 )
 
@@ -100,21 +110,11 @@ iree_fetch_artifact(
 
 iree_fetch_artifact(
   NAME
-    "model-4a6f545e-1b4e-41a5-9236-792aa578184b"
+    "model-5afc3014-d29d-4e88-a840-fbaf678acf2b"
   SOURCE_URL
-    "https://storage.googleapis.com/iree-model-artifacts/efficientnet_lite0_int8_2.tflite"
+    "https://storage.googleapis.com/iree-model-artifacts/posenet.tflite"
   OUTPUT
-    "${ROOT_ARTIFACTS_DIR}/model_4a6f545e-1b4e-41a5-9236-792aa578184b_EfficientNet_int8.tflite"
-  UNPACK
-)
-
-iree_fetch_artifact(
-  NAME
-    "model-ecf5c970-ee97-49f0-a4ed-df1f34e9d493"
-  SOURCE_URL
-    "https://storage.googleapis.com/iree-model-artifacts/minilm-l12-h384-uncased-seqlen128-tf-model.tar.gz"
-  OUTPUT
-    "${ROOT_ARTIFACTS_DIR}/model_ecf5c970-ee97-49f0-a4ed-df1f34e9d493_MiniLML12H384Uncased"
+    "${ROOT_ARTIFACTS_DIR}/model_5afc3014-d29d-4e88-a840-fbaf678acf2b_PoseNet_fp32.tflite"
   UNPACK
 )
 
@@ -130,6 +130,16 @@ iree_fetch_artifact(
 
 iree_fetch_artifact(
   NAME
+    "model-8871f602-571c-4eb8-b94d-554cc8ceec5a"
+  SOURCE_URL
+    "https://storage.googleapis.com/iree-model-artifacts/bert-large-seq384-tf-model.tar.gz"
+  OUTPUT
+    "${ROOT_ARTIFACTS_DIR}/model_8871f602-571c-4eb8-b94d-554cc8ceec5a_BertLargeTF"
+  UNPACK
+)
+
+iree_fetch_artifact(
+  NAME
     "model-ebe7897f-5613-435b-a330-3cb967704e5e"
   SOURCE_URL
     "https://storage.googleapis.com/iree-model-artifacts/efficientnet-v2-s-tf-model.tar.gz"
@@ -140,10 +150,40 @@ iree_fetch_artifact(
 
 iree_fetch_artifact(
   NAME
+    "model-ecf5c970-ee97-49f0-a4ed-df1f34e9d493"
+  SOURCE_URL
+    "https://storage.googleapis.com/iree-model-artifacts/minilm-l12-h384-uncased-seqlen128-tf-model.tar.gz"
+  OUTPUT
+    "${ROOT_ARTIFACTS_DIR}/model_ecf5c970-ee97-49f0-a4ed-df1f34e9d493_MiniLML12H384Uncased"
+  UNPACK
+)
+
+iree_fetch_artifact(
+  NAME
     "model-c393b4fa-beb4-45d5-982a-c6328aa05d08"
   SOURCE_URL
     "https://storage.googleapis.com/iree-model-artifacts/resnet50-tf-model.tar.gz"
   OUTPUT
     "${ROOT_ARTIFACTS_DIR}/model_c393b4fa-beb4-45d5-982a-c6328aa05d08_Resnet50TF"
+  UNPACK
+)
+
+iree_fetch_artifact(
+  NAME
+    "model-9a9515c7-cb68-4c34-b1d2-0e8c0a3620b8"
+  SOURCE_URL
+    "https://storage.googleapis.com/iree-model-artifacts/pytorch/torch_models_20230307.103_1678163233/SD_CLIP_TEXT_MODEL_SEQLEN64/linalg.mlir"
+  OUTPUT
+    "${ROOT_ARTIFACTS_DIR}/model_9a9515c7-cb68-4c34-b1d2-0e8c0a3620b8_ClipTextSeqLen64PT.mlir"
+  UNPACK
+)
+
+iree_fetch_artifact(
+  NAME
+    "model-340553d1-e6fe-41b6-b2c7-687c74ccec56"
+  SOURCE_URL
+    "https://storage.googleapis.com/iree-model-artifacts/pytorch/torch_models_20230307.103_1678163233/SD_UNET_MODEL/linalg.mlir"
+  OUTPUT
+    "${ROOT_ARTIFACTS_DIR}/model_340553d1-e6fe-41b6-b2c7-687c74ccec56_Unet2dPT.mlir"
   UNPACK
 )

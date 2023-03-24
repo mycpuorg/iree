@@ -32,8 +32,8 @@ namespace IREE {
 namespace Flow {
 
 /// Check if any of the use dominates all other uses of the operation.
-static Optional<OpOperand *> getFusableUse(Operation *op,
-                                           DominanceInfo &dominanceInfo) {
+static std::optional<OpOperand *> getFusableUse(Operation *op,
+                                                DominanceInfo &dominanceInfo) {
   auto uses = op->getUses();
   for (OpOperand &source : uses) {
     Operation *sourceOp = source.getOwner();
@@ -71,6 +71,15 @@ static bool areFusableOps(MLIRContext *context, Operation *producerOp,
         return false;
       })) {
     return true;
+  }
+
+  // Don't fuse if all of the consumer maps aren't projected permutations.
+  if (auto linalgConsumerOp = dyn_cast<linalg::LinalgOp>(consumerOp)) {
+    if (!llvm::all_of(
+            linalgConsumerOp.getIndexingMapsArray(),
+            [](AffineMap map) { return map.isProjectedPermutation(); })) {
+      return false;
+    }
   }
 
   // If producer has a single user, always fuse
@@ -123,19 +132,17 @@ struct FuseElementwiseOpsWithMultipleUses
     consumerOp->removeAttr(getConsumerAttributeName());
     producerOp->removeAttr(getProducerAttributeName());
 
-    FailureOr<linalg::ElementwiseOpFusionResult> fusedOperation =
+    FailureOr<linalg::ElementwiseOpFusionResult> fusionResult =
         linalg::fuseElementwiseOps(rewriter, fusedOperand);
-    if (failed(fusedOperation)) {
+    if (failed(fusionResult)) {
       return rewriter.notifyMatchFailure(consumerOp,
                                          "failed to fuse with producer");
     }
-    assert(fusedOperation.value().fusedOp->getNumResults() ==
-           producerOp->getNumResults() + consumerOp->getNumResults());
-    auto fusedResults = fusedOperation.value().fusedOp->getResults();
-    rewriter.replaceOp(producerOp,
-                       fusedResults.take_front(producerOp->getNumResults()));
-    rewriter.replaceOp(consumerOp,
-                       fusedResults.take_back(consumerOp->getNumResults()));
+    for (auto replacement : fusionResult->replacements) {
+      rewriter.replaceUsesWithIf(
+          replacement.first, replacement.second,
+          [&](OpOperand &use) { return use.getOwner() != consumerOp; });
+    }
     return success();
   }
 };
@@ -160,7 +167,8 @@ static FailureOr<unsigned> fuseMultiUseProducers(Operation *funcOp,
       return;
     }
 
-    Optional<OpOperand *> fusableUse = getFusableUse(genericOp, dominanceInfo);
+    std::optional<OpOperand *> fusableUse =
+        getFusableUse(genericOp, dominanceInfo);
     if (!fusableUse) return;
     if (!linalg::areElementwiseOpsFusable(fusableUse.value())) return;
 

@@ -331,12 +331,12 @@ class TransposeReshapeGenericDotGeneral
     auto rhsContractingDims = dimNumbers.getRhsContractingDimensions();
 
     // No contraction dims means this can be represented as a mul.
-    if (lhsContractingDims.size() == 0) return failure();
-    if (rhsContractingDims.size() == 0) return failure();
+    if (lhsContractingDims.size() == 0 || rhsContractingDims.size() == 0)
+      return rewriter.notifyMatchFailure(op, "can be represented as mhlo.mul");
 
     // No batching dimensions means this can be represented a dot.
-    if (lhsBatchingDims.size() == 0) return failure();
-    if (rhsBatchingDims.size() == 0) return failure();
+    if (lhsBatchingDims.size() == 0 || rhsBatchingDims.size() == 0)
+      return rewriter.notifyMatchFailure(op, "can be represented as mhlo.dot");
 
     SmallVector<bool> isLhsParallel(lhsShapeType.getRank(), true);
     for (auto i : lhsBatchingDims) {
@@ -388,16 +388,19 @@ class TransposeReshapeGenericDotGeneral
         rhsContractionBase + rhsContractingDims.size();
 
     lhs = ReshapeIfMorethan3D(rewriter, op.getLoc(), lhs,
-                              rhsBatchingDims.size(), lhsContractionBase);
+                              lhsBatchingDims.size(), lhsContractionBase);
     rhs = ReshapeIfMorethan3D(rewriter, op.getLoc(), rhs,
                               rhsBatchingDims.size(), numRhsContractionDims);
 
-    if (lhs == op.getLhs() && rhs == op.getRhs()) return failure();
+    if (lhs == op.getLhs() && rhs == op.getRhs())
+      return rewriter.notifyMatchFailure(op, "already in canonical form");
 
     auto dimensionNumbers = mhlo::DotDimensionNumbersAttr::get(
         rewriter.getContext(), /*lhsBatchingDimensions=*/0,
         /*rhsBatchingDimensions=*/0,
-        /*lhsContractingDimensions=*/2, /*rhsContractingDimensions=*/1);
+        /*lhsContractingDimensions=*/
+        lhs.getType().cast<ShapedType>().getRank() - 1,
+        /*rhsContractingDimensions=*/1);
     auto lhsNewType = lhs.getType().cast<RankedTensorType>();
     auto rhsNewType = rhs.getType().cast<RankedTensorType>();
 
@@ -406,8 +409,9 @@ class TransposeReshapeGenericDotGeneral
                              rhsNewType.getRank() < rhsShapeType.getRank();
     // batching、lhs parallel、rhs parallel this order is a convension
     SmallVector<int64_t, 4> newShape = {lhsNewType.getShape()[0],
-                                        lhsNewType.getShape()[1],
-                                        rhsNewType.getShape()[2]};
+                                        lhsNewType.getShape()[1]};
+    if (rhsNewType.getRank() > 2) newShape.push_back(rhsNewType.getDimSize(2));
+
     auto newResultType =
         needReshapeResult
             ? RankedTensorType::get(newShape, resultType.getElementType())
@@ -432,6 +436,45 @@ class TransposeReshapeGenericDotGeneral
           rewriter.create<mhlo::ReshapeOp>(op.getLoc(), resultType, result);
     }
     rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct ScatterInt64Indices : public OpRewritePattern<mhlo::ScatterOp> {
+  using OpRewritePattern<mhlo::ScatterOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mhlo::ScatterOp op,
+                                PatternRewriter &rewriter) const final {
+    auto indices = op.getScatterIndices();
+    auto indicesTy = indices.getType();
+    auto indicesETy = indicesTy.getElementType();
+    if (indicesETy.isInteger(32))
+      return rewriter.notifyMatchFailure(op, "already has i32 index type");
+
+    if (!indicesTy.hasStaticShape())
+      return rewriter.notifyMatchFailure(op, "cannot validate legal size");
+
+    uint64_t maxSize = std::numeric_limits<int32_t>::max();
+    if (indicesETy.getIntOrFloatBitWidth() > 32) {
+      for (int i = 0, s = indicesTy.getRank(); i < s; ++i) {
+        if (indicesTy.getDimSize(i) > maxSize) {
+          return rewriter.notifyMatchFailure(op, "index may exceed i32 max");
+        }
+      }
+    }
+
+    indices = rewriter.create<mhlo::ConvertOp>(
+        op.getLoc(), indicesTy.clone(rewriter.getI32Type()), indices);
+
+    auto newScatter = rewriter.create<mhlo::ScatterOp>(
+        op.getLoc(), op.getResultTypes(), op.getInputs(), indices,
+        op.getUpdates(), op.getScatterDimensionNumbers(),
+        op.getIndicesAreSorted(), op.getUniqueIndices());
+
+    Region &region = newScatter.getUpdateComputation();
+    rewriter.cloneRegionBefore(op.getUpdateComputation(), region, region.end());
+    rewriter.replaceOp(op, newScatter.getResults());
+
     return success();
   }
 };
@@ -510,7 +553,7 @@ struct ScatterImplicitBatch : public OpRewritePattern<mhlo::ScatterOp> {
                                 PatternRewriter &rewriter) const final {
     auto dimNumbers = op.getScatterDimensionNumbers();
     auto indexVectorDim = dimNumbers.getIndexVectorDim();
-    auto indices = op.getScatterIndices();
+    auto indices = op.getScatterIndices().cast<Value>();
     auto indicesTy = indices.getType().dyn_cast<RankedTensorType>();
 
     // Check whether indices has no batch dimension.
@@ -593,7 +636,7 @@ struct ScatterCollapseBatch : public OpRewritePattern<mhlo::ScatterOp> {
                                 PatternRewriter &rewriter) const final {
     auto dimNumbers = op.getScatterDimensionNumbers();
     auto indexVectorDim = dimNumbers.getIndexVectorDim();
-    auto indices = op.getScatterIndices();
+    auto indices = op.getScatterIndices().cast<Value>();
     auto indicesTy = indices.getType().cast<ShapedType>();
     auto updatedWindowDims = dimNumbers.getUpdateWindowDims();
 
@@ -1235,8 +1278,8 @@ struct DotGeneralIsMul : public OpRewritePattern<mhlo::DotGeneralOp> {
 
   LogicalResult matchAndRewrite(mhlo::DotGeneralOp op,
                                 PatternRewriter &rewriter) const override {
-    auto lhs = op.getLhs();
-    auto rhs = op.getRhs();
+    auto lhs = op.getLhs().cast<Value>();
+    auto rhs = op.getRhs().cast<Value>();
     auto lhsTy = lhs.getType().dyn_cast<RankedTensorType>();
     auto rhsTy = rhs.getType().dyn_cast<RankedTensorType>();
     auto resultTy = op.getType().dyn_cast<RankedTensorType>();
@@ -1403,9 +1446,9 @@ struct MHLOToMHLOPreprocessingPass
     patterns.insert<ExpandRngNormal, MulCastOfBool>(context);
 
     // scatter canonicalization patterns
-    patterns.insert<ScatterImplicitIndex, ScatterImplicitBatch,
-                    ScatterMaterializeInsertedDim, ScatterCollapseBatch,
-                    ScatterBatchFirst>(context);
+    patterns.insert<ScatterInt64Indices, ScatterImplicitIndex,
+                    ScatterImplicitBatch, ScatterMaterializeInsertedDim,
+                    ScatterCollapseBatch, ScatterBatchFirst>(context);
 
     // dot_general canoncalization patterns.
     mhlo::populateGeneralDotOpLoweringPatterns(&patterns, context);

@@ -67,8 +67,8 @@ def FormDispatchRegions :
   let summary = "Form Dispatch Region Ops from Linalg operations on tensors to form dispatch.regions";
   let constructor = "mlir::iree_compiler::IREE::Flow::createFormDispatchRegionsPass()";
   let options = [
-    Option<"aggressiveFusion", "aggressive-fusion", "bool",
-           /*default=*/"false", "Fuse with aggressive heuristics">,
+    Option<"fuseMultiUse", "fuse-multi-use", "bool",
+           /*default=*/"false", "Fuse multi-use ops">,
     Option<"generateWorkloadRegion", "genereate-workload-region", "bool",
            /*default=*/"true", "Generate workload regions of WorkgroupOps">,
   ];
@@ -82,6 +82,12 @@ def FormDispatchWorkgroups :
     Option<"generateWorkloadRegion", "genereate-workload-region", "bool",
            /*default=*/"true", "Generate workload regions of WorkgroupOps">,
   ];
+}
+
+def CloneProducersIntoDispatchRegions :
+    InterfacePass<"iree-flow-clone-producers-into-dispatch-regions", "mlir::FunctionOpInterface"> {
+  let summary = "Clone producers into dispatch regions to be isolated above";
+  let constructor = "mlir::iree_compiler::IREE::Flow::createCloneProducersIntoDispatchRegionsPass()";
 }
 
 def CollapseDimensions :
@@ -119,6 +125,12 @@ def DispatchWithTransformDialect :
             "If empty (normal operation mode), select the container of the "
             "top-level transform op.">
   ];
+}
+
+def EraseUnusedLinalgOperands :
+    Pass<"iree-flow-erase-unused-linalg-operands", "mlir::ModuleOp"> {
+  let summary = "Erase unused linalg operand and remove dead code.";
+  let constructor = "mlir::iree_compiler::IREE::Flow::createEraseUnusedLinalgOperands()";
 }
 
 def ExpandTensorShapes :
@@ -227,6 +239,12 @@ def DumpDispatchGraph : Pass<"iree-flow-dump-dispatch-graph-pass"> {
             /*default=*/"true", "Print result types of operations">
   ];
   let constructor = "mlir::iree_compiler::IREE::Flow::createDumpDispatchGraphPass()";
+}
+
+def RaiseSpecialOps :
+    Pass<"iree-flow-raise-special-ops", ""> {
+  let summary = "raise special ops like softmax to the high level linalg.ext representation";
+  let constructor = "mlir::iree_compiler::IREE::Flow::createRaiseSpecialOps()";
 }
 
 def SplitReduction :

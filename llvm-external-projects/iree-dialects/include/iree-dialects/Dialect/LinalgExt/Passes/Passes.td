@@ -71,17 +71,6 @@ def TopkSplitReduction:
   ];
 }
 
-def LinalgExtVectorization:
-    Pass<"iree-linalg-ext-vectorization", "func::FuncOp"> {
-  let summary = "Vectorization pass for LinalgExt pack ops.";
-  let description = [{
-    Vectorizes LinalgExt ops when they meet the conditions, e.g., having static
-    shapes, etc.
-  }];
-  let constructor = "mlir::iree_compiler::IREE::LinalgExt::"
-                    "createLinalgExtVectorizationPass()";
-}
-
 def TileAndDecomposeWinogradTransform :
     Pass<"iree-linalg-ext-tile-and-decompose-winograd", "func::FuncOp"> {
   let summary =
@@ -164,22 +153,6 @@ def LinalgStrategyDecomposePass
   let options = [
     Option<"anchorFuncName", "anchor-func", "std::string", /*default=*/"",
       "Which func op is the anchor to latch on.">,
-  ];
-}
-
-def LinalgStrategyPeelPass
-    : Pass<"iree-linalg-strategy-peel-pass", "func::FuncOp"> {
-  let summary = "Configurable pass to apply pattern-based linalg peeling.";
-  let constructor = "createLinalgStrategyPeelPass()";
-  let dependentDialects = [
-    "linalg::LinalgDialect",
-    "scf::SCFDialect"
-  ];
-  let options = [
-    Option<"anchorFuncName", "anchor-func", "std::string", /*default=*/"",
-      "Which func op is the anchor to latch on.">,
-    Option<"anchorOpName", "anchor-op", "std::string", /*default=*/"",
-      "Which linalg op within the func is the anchor to latch on.">,
   ];
 }
 

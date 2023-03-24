@@ -204,7 +204,7 @@ void SPIRVTileAndPromotePass::runOnOperation() {
       exportOp->getWorkgroupSize().value(),
       [&](Attribute attr) { return attr.cast<IntegerAttr>().getInt(); }));
   int64_t totalThreads = workgroupSize[0] * workgroupSize[1] * workgroupSize[2];
-  Optional<int> subgroupSize = getSPIRVSubgroupSize(funcOp);
+  std::optional<int> subgroupSize = getSPIRVSubgroupSize(funcOp);
   if (!subgroupSize) {
     funcOp->emitError("failed to query subgroup size");
     return signalPassFailure();
@@ -297,10 +297,7 @@ LogicalResult SPIRVTileAndPromotePass::doPromoteCMatrix(
   MLIRContext *context = funcOp.getContext();
   if (!promoteCMatrix) return success();
 
-  SmallVector<Operation *> computeOps;
-  if (failed(getComputeOps(funcOp, computeOps)))
-    return funcOp.emitError("failed to get compute ops");
-
+  SmallVector<Operation *> computeOps = getComputeOps(funcOp);
   SmallVector<Operation *> linalgOps;
   for (Operation *op : computeOps) {
     if (isa<linalg::FillOp>(op)) continue;  // Don't care

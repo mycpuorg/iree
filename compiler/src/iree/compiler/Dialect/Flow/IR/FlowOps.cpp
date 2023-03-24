@@ -114,7 +114,7 @@ static llvm::SmallBitVector getDroppedDimsImpl(
   }
   unsigned shapePos = 0;
   for (const auto &size : llvm::enumerate(mixedSizes)) {
-    Optional<int64_t> sizeVal = getConstantIntValue(size.value());
+    std::optional<int64_t> sizeVal = getConstantIntValue(size.value());
     // If the size is not 1, or if the current matched dimension of the result
     // is the same static shape as the size value (which is 1), then the
     // dimension is preserved.
@@ -129,7 +129,7 @@ static llvm::SmallBitVector getDroppedDimsImpl(
 }
 
 /// Returns the `hal.interface.binding` a value comes from.
-static Optional<BlockArgument> getBindingArgument(Value v) {
+static std::optional<BlockArgument> getBindingArgument(Value v) {
   if (BlockArgument blockArg = v.dyn_cast<BlockArgument>()) {
     if (isa<IREE::Flow::DispatchWorkgroupsOp>(
             blockArg.getOwner()->getParentOp())) {
@@ -348,6 +348,9 @@ ParseResult DispatchRegionOp::parse(OpAsmParser &parser,
                           {static_cast<int32_t>(allOperands.size()),
                            static_cast<int32_t>(workloadOperands.size())}));
 
+  if (parser.resolveOperands(allOperands, parser.getBuilder().getIndexType(),
+                             result.operands))
+    return failure();
   if (parser.resolveOperands(workloadOperands,
                              parser.getBuilder().getIndexType(),
                              workloadOperandsLoc, result.operands)) {
@@ -355,9 +358,6 @@ ParseResult DispatchRegionOp::parse(OpAsmParser &parser,
   }
 
   result.addTypes(resultTypes);
-  if (parser.resolveOperands(allOperands, parser.getBuilder().getIndexType(),
-                             result.operands))
-    return failure();
   return success();
 }
 
@@ -495,7 +495,7 @@ LogicalResult DispatchTieShapeOp::verify() {
 
 LogicalResult DispatchTieShapeOp::reifyResultShapes(
     OpBuilder &b, ReifiedRankedShapedTypeDims &reifiedReturnShapes) {
-  SmallVector<Value> shape;
+  SmallVector<OpFoldResult> shape;
   unsigned dynamicIdx = 0;
   auto tensorType =
       getResult().getType().cast<IREE::Flow::DispatchTensorType>();
@@ -503,7 +503,7 @@ LogicalResult DispatchTieShapeOp::reifyResultShapes(
     if (dim == ShapedType::kDynamic) {
       shape.push_back(getDynamicDims()[dynamicIdx++]);
     } else {
-      shape.push_back(b.create<arith::ConstantIndexOp>(getLoc(), dim));
+      shape.push_back(b.getIndexAttr(dim));
     }
   }
   reifiedReturnShapes.push_back(shape);
@@ -635,7 +635,7 @@ void DispatchTensorLoadOp::build(OpBuilder &builder, OperationState &state,
 LogicalResult DispatchTensorLoadOp::reifyResultShapes(
     OpBuilder &b, ReifiedRankedShapedTypeDims &reifiedReturnShapes) {
   auto mixedSizes = getMixedSizes();
-  SmallVector<Value> shape;
+  SmallVector<OpFoldResult> shape;
   if (!mixedSizes.empty()) {
     // Slicing out a tile; return the size sliced.
     shape.reserve(mixedSizes.size());
@@ -644,8 +644,7 @@ LogicalResult DispatchTensorLoadOp::reifyResultShapes(
       if (droppedDims.test(mixedSize.index())) {
         continue;
       }
-      shape.push_back(
-          getValueOrCreateConstantIndexOp(b, getLoc(), mixedSize.value()));
+      shape.push_back(mixedSize.value());
     }
   } else {
     // Result size matches the source size (no slicing).
@@ -654,7 +653,7 @@ LogicalResult DispatchTensorLoadOp::reifyResultShapes(
       if (dim == ShapedType::kDynamic) {
         shape.push_back(getSourceDims()[dynamicIdx++]);
       } else {
-        shape.push_back(b.create<arith::ConstantIndexOp>(getLoc(), dim));
+        shape.push_back(b.getIndexAttr(dim));
       }
     }
   }
@@ -666,7 +665,7 @@ Value DispatchTensorLoadOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getSource());
 }
 
-::llvm::Optional<unsigned> DispatchTensorLoadOp::getTiedResultOperandIndex(
+::std::optional<unsigned> DispatchTensorLoadOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // source
 }
@@ -924,7 +923,7 @@ LogicalResult DispatchWorkgroupsOp::verify() {
 }
 
 BlockArgument DispatchWorkgroupsOp::getOutputBlockArgument(unsigned idx) {
-  Optional<ArrayAttr> tiedOperands = getTiedOperands();
+  std::optional<ArrayAttr> tiedOperands = getTiedOperands();
   if (!tiedOperands.has_value() || tiedOperands->empty()) {
     unsigned numInputs = getArguments().size();
     return getWorkgroupBody().getArguments().drop_front(numInputs)[idx];
@@ -960,9 +959,14 @@ Operation::result_range DispatchWorkgroupsOp::getClosureResults() {
   return getResults();
 }
 
-// Inline operations that the dispatch region can handle natively.
-static bool canDispatchRegionContainOp(Operation *op) {
-  // Inline constant operations that are splat or small constants.
+bool DispatchWorkgroupsOp::canClosureContainOp(Operation *op) {
+  // For now we only allow constants; we could bring other ops across the
+  // boundary though if we want (particularly metadata ops).
+  // Note that the closure optimization may still filter out the constant op if
+  // it's not configured to inline constants of certain types/sizes.
+  // TODO(#12233): this should just be isa<ConstantOp> but today we need to
+  // ensure that we don't mess with tensors after dispatch region formation due
+  // to requirements around tensor access checking.
   if (auto constantOp = dyn_cast<arith::ConstantOp>(op)) {
     auto constantType = constantOp.getType();
     if (constantType.isIntOrIndexOrFloat()) {
@@ -970,10 +974,6 @@ static bool canDispatchRegionContainOp(Operation *op) {
     }
   }
   return false;
-}
-
-bool DispatchWorkgroupsOp::canClosureContainOp(Operation *op) {
-  return canDispatchRegionContainOp(op);
 }
 
 // Refines the tensor access from what is declared on |type| based on actual
@@ -985,15 +985,20 @@ static TensorAccess refineTensorAccess(Value value, DispatchTensorType type) {
     // If the argument is a result with `readwrite` access, return false if the
     // value is only written to. Check this by looking at the uses of the
     // argument being only the `target` of `flow.dispatch.tensor.store` ops.
-    bool onlyWrites = true;
+    bool hasReads = false;
+    bool hasWrites = false;
     for (OpOperand &uses : value.getUses()) {
-      auto storeOp = dyn_cast<DispatchTensorStoreOp>(uses.getOwner());
-      if (!(storeOp && storeOp.getTarget() == uses.get())) {
-        onlyWrites = false;
-        break;
-      }
+      TypeSwitch<Operation *>(uses.getOwner())
+          .Case<DispatchTensorLoadOp>([&](auto loadOp) { hasReads = true; })
+          .Case<DispatchTensorStoreOp>([&](auto storeOp) { hasWrites = true; })
+          .Default([&](auto op) {
+            // Treat unknown ops conservatively as read/write.
+            hasReads = true;
+            hasWrites = true;
+          });
     }
-    if (onlyWrites) tensorAccess = TensorAccess::WriteOnly;
+    if (hasReads && !hasWrites) tensorAccess = TensorAccess::ReadOnly;
+    if (!hasReads && hasWrites) tensorAccess = TensorAccess::WriteOnly;
   }
   return tensorAccess;
 }
@@ -1374,14 +1379,14 @@ LogicalResult TensorTieShapeOp::verify() {
 
 LogicalResult TensorTieShapeOp::reifyResultShapes(
     OpBuilder &b, ReifiedRankedShapedTypeDims &reifiedReturnShapes) {
-  SmallVector<Value> shape;
+  SmallVector<OpFoldResult> shape;
   unsigned dynamicIdx = 0;
   auto tensorType = getResult().getType().cast<RankedTensorType>();
   for (int64_t dim : tensorType.getShape()) {
     if (dim == ShapedType::kDynamic) {
       shape.push_back(getDynamicDims()[dynamicIdx++]);
     } else {
-      shape.push_back(b.create<arith::ConstantIndexOp>(getLoc(), dim));
+      shape.push_back(b.getIndexAttr(dim));
     }
   }
   reifiedReturnShapes.push_back(shape);
@@ -1406,7 +1411,7 @@ Value TensorReshapeOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getSource());
 }
 
-::llvm::Optional<unsigned> TensorReshapeOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TensorReshapeOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // source
 }
@@ -1444,7 +1449,7 @@ Value TensorUpdateOp::getTiedResult(unsigned resultIndex) {
   return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
 }
 
-::llvm::Optional<unsigned> TensorUpdateOp::getTiedResultOperandIndex(
+::std::optional<unsigned> TensorUpdateOp::getTiedResultOperandIndex(
     unsigned resultIndex) {
   return {0};  // target
 }
@@ -1506,9 +1511,9 @@ struct FoldInsertSliceWithTensorStoreOp
 
     // Check that the `dest` of the `tensor.insert_slice` and target of the
     // `flow.dispatch.tensor.store` are the same interface binding.
-    Optional<BlockArgument> destBinding =
+    std::optional<BlockArgument> destBinding =
         getBindingArgument(insertSliceOp.getDest());
-    Optional<BlockArgument> targetBinding =
+    std::optional<BlockArgument> targetBinding =
         getBindingArgument(dispatchTensorStoreOp.getTarget());
     if (!destBinding || !targetBinding ||
         destBinding.value() != targetBinding.value()) {
@@ -1543,6 +1548,118 @@ void populateTensorSliceOpWithDispatchTensorOpFoldingPatterns(
   patterns
       .insert<FoldTensorLoadWithExtractSlice, FoldInsertSliceWithTensorStoreOp>(
           context);
+}
+
+//===----------------------------------------------------------------------===//
+// flow.channel.count
+//===----------------------------------------------------------------------===//
+
+void ChannelCountOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  setNameFn(getResult(), "channel_count");
+}
+
+//===----------------------------------------------------------------------===//
+// flow.channel.default
+//===----------------------------------------------------------------------===//
+
+void ChannelDefaultOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  setNameFn(getResult(), "channel_default");
+}
+
+//===----------------------------------------------------------------------===//
+// flow.channel.rank
+//===----------------------------------------------------------------------===//
+
+void ChannelRankOp::getAsmResultNames(
+    function_ref<void(Value, StringRef)> setNameFn) {
+  setNameFn(getResult(), "channel_rank");
+}
+
+//===----------------------------------------------------------------------===//
+// flow.collective.all_gather
+//===----------------------------------------------------------------------===//
+
+Value CollectiveAllGatherOp::getTiedResult(unsigned resultIndex) {
+  return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
+}
+
+::std::optional<unsigned> CollectiveAllGatherOp::getTiedResultOperandIndex(
+    unsigned resultIndex) {
+  return {0};  // target
+}
+
+SmallVector<int64_t, 4> CollectiveAllGatherOp::getTiedResultOperandIndices() {
+  return {0};  // target
+}
+
+void CollectiveAllGatherOp::build(OpBuilder &builder, OperationState &state,
+                                  CollectiveElementTypeAttr elementType,
+                                  Value target, Value source, Value channel) {
+  auto targetDims =
+      IREE::Util::buildDynamicDimsForValue(state.location, target, builder);
+
+  build(builder, state, elementType, target, targetDims, source, channel,
+        builder.getIndexArrayAttr({0}));
+}
+
+//===----------------------------------------------------------------------===//
+// flow.collective.all_reduce
+//===----------------------------------------------------------------------===//
+
+Value CollectiveAllReduceOp::getTiedResult(unsigned resultIndex) {
+  return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
+}
+
+::std::optional<unsigned> CollectiveAllReduceOp::getTiedResultOperandIndex(
+    unsigned resultIndex) {
+  return {0};  // target
+}
+
+SmallVector<int64_t, 4> CollectiveAllReduceOp::getTiedResultOperandIndices() {
+  return {0};  // target
+}
+
+void CollectiveAllReduceOp::build(OpBuilder &builder, OperationState &state,
+                                  CollectiveReductionOpAttr reductionOp,
+                                  CollectiveElementTypeAttr elementType,
+                                  Value target, Value source, Value channel) {
+  auto targetDims =
+      IREE::Util::buildDynamicDimsForValue(state.location, target, builder);
+
+  build(builder, state, reductionOp, elementType, target, targetDims, source,
+        channel, builder.getIndexArrayAttr({0}));
+}
+
+//===----------------------------------------------------------------------===//
+// flow.collective.reduce_scatter
+//===----------------------------------------------------------------------===//
+
+Value CollectiveReduceScatterOp::getTiedResult(unsigned resultIndex) {
+  return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
+}
+
+::std::optional<unsigned> CollectiveReduceScatterOp::getTiedResultOperandIndex(
+    unsigned resultIndex) {
+  return {0};  // target
+}
+
+SmallVector<int64_t, 4>
+CollectiveReduceScatterOp::getTiedResultOperandIndices() {
+  return {0};  // target
+}
+
+void CollectiveReduceScatterOp::build(OpBuilder &builder, OperationState &state,
+                                      CollectiveReductionOpAttr reductionOp,
+                                      CollectiveElementTypeAttr elementType,
+                                      Value target, Value source,
+                                      Value channel) {
+  auto targetDims =
+      IREE::Util::buildDynamicDimsForValue(state.location, target, builder);
+
+  build(builder, state, reductionOp, elementType, target, targetDims, source,
+        channel, builder.getIndexArrayAttr({0}));
 }
 
 }  // namespace Flow
