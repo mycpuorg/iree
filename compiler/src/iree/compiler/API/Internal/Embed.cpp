@@ -42,6 +42,7 @@
 #include <limits>
 
 #include "iree/compiler/API/Internal/Diagnostics.h"
+#include "iree/compiler/API/MLIRInterop.h"
 #include "iree/compiler/ConstEval/Passes.h"
 #include "iree/compiler/Dialect/VM/Target/init_targets.h"
 #include "iree/compiler/Pipelines/Pipelines.h"
@@ -62,6 +63,8 @@
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include "mlir/CAPI/IR.h"
+#include "mlir/CAPI/Wrap.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dialect.h"
@@ -79,6 +82,9 @@
 #ifdef _WIN32
 #include "llvm/Support/Windows/WindowsSupport.h"
 #endif
+
+#define IREE_COMPILER_API_MAJOR 1
+#define IREE_COMPILER_API_MINOR 1
 
 namespace mlir::iree_compiler::embed {
 namespace {
@@ -105,6 +111,9 @@ struct GlobalInit {
   // Populated and retained if we have to copy and handle our own permuted
   // argv (i.e. Windows). Otherwise, not used.
   llvm::SmallVector<const char *> retainedArgv;
+
+  // Stash the revision for the life of the instance.
+  std::string revision = getIreeRevision();
 
   // Our session options can optionally be bound to the global command-line
   // environment. If that is not the case, then these will be nullptr, and
@@ -138,7 +147,7 @@ GlobalInit::GlobalInit() {
   }
   pluginManager.globalInitialize();
   pluginManager.registerPasses();
-  pluginManager.registerDialects(registry);
+  pluginManager.registerGlobalDialects(registry);
 }
 
 void GlobalInit::registerCommandLineOptions() {
@@ -198,7 +207,14 @@ struct Session {
   LogicalResult activatePluginsOnce() {
     if (!pluginsActivated) {
       pluginsActivated = true;
-      pluginActivationStatus = pluginSession.activatePlugins(&context);
+      if (failed(pluginSession.initializePlugins())) {
+        pluginActivationStatus = failure();
+      } else {
+        DialectRegistry registry;
+        pluginSession.registerDialects(registry);
+        context.appendDialectRegistry(registry);
+        pluginActivationStatus = pluginSession.activatePlugins(&context);
+      }
     }
     return pluginActivationStatus;
   }
@@ -496,24 +512,18 @@ void Output::keep() {
 // Invocation corresponds to iree_compiler_invocation_t
 struct Invocation {
   Invocation(Session &session);
+  bool initializeInvocation();
   bool parseSource(Source &source);
+  bool importModule(OwningOpRef<Operation *> inputModule);
   bool runPipeline(enum iree_compiler_pipeline_t pipeline);
   Error *outputIR(Output &output);
   Error *outputVMBytecode(Output &output);
   Error *outputVMCSource(Output &output);
   Error *outputHALExecutable(Output &output);
 
-  IREEVMPipelineHooks &getHooks() {
-    static IREEVMPipelineHooks hooks = {
-        // buildConstEvalPassPipelineCallback =
-        [](OpPassManager &pm) {
-          pm.addPass(ConstEval::createJitGlobalsPass());
-        }};
-    return hooks;
-  }
-
   Session &session;
   PassManager passManager;
+  IREEVMPipelineHooks pipelineHooks;
 
   // Diagnostic handlers are instantiated upon parsing the source (when we
   // have the SrcMgr) and held for the duration of the invocation. Each will
@@ -539,17 +549,27 @@ struct Invocation {
 Invocation::Invocation(Session &session)
     : session(session), passManager(&session.context) {
   if (session.globalInit.usesCommandLine) {
-    mlir::applyPassManagerCLOptions(passManager);
+    if (failed(mlir::applyPassManagerCLOptions(passManager))) {
+      emitError(UnknownLoc::get(&session.context))
+          << "Failed to apply pass manager CL options";
+    }
     mlir::applyDefaultTimingPassManagerCLOptions(passManager);
   }
   passManager.addInstrumentation(std::make_unique<PassTracing>());
+
+  // Since the jitter invokes much of the top-level compiler recursively,
+  // it must be injected at the top-level here vs in the pass pipeline
+  // (or else the circular dependency cannot be resolved).
+  pipelineHooks.buildConstEvalPassPipelineCallback = [](OpPassManager &pm) {
+    pm.addPass(ConstEval::createJitGlobalsPass());
+  };
+  // The PluginSession implements PipelineExtensions and delegates it to
+  // activated plugins.
+  pipelineHooks.pipelineExtensions = &session.pluginSession;
 }
 
-bool Invocation::parseSource(Source &source) {
-  // Initialize diagnostics.
-  if (enableConsoleDiagnosticHandler && !consoleDiagnosticHandler) {
-    consoleDiagnosticHandler.emplace(source.sourceMgr, &session.context);
-  }
+bool Invocation::initializeInvocation() {
+  // Initialize callback diagnostics.
   if (diagnosticCallback && !callbackDiagnosticHandler) {
     callbackDiagnosticHandler.emplace(
         &session.context,
@@ -560,16 +580,17 @@ bool Invocation::parseSource(Source &source) {
               cSeverity = IREE_COMPILER_DIAGNOSTIC_SEVERITY_NOTE;
               break;
             case DiagnosticSeverity::Warning:
-              cSeverity = IREE_COMPILER_DIAGNOSTIC_SEVERITY_NOTE;
+              cSeverity = IREE_COMPILER_DIAGNOSTIC_SEVERITY_WARNING;
               break;
             case DiagnosticSeverity::Error:
-              cSeverity = IREE_COMPILER_DIAGNOSTIC_SEVERITY_NOTE;
+              cSeverity = IREE_COMPILER_DIAGNOSTIC_SEVERITY_ERROR;
               break;
             case DiagnosticSeverity::Remark:
-              cSeverity = IREE_COMPILER_DIAGNOSTIC_SEVERITY_NOTE;
+              cSeverity = IREE_COMPILER_DIAGNOSTIC_SEVERITY_REMARK;
               break;
             default:
               cSeverity = IREE_COMPILER_DIAGNOSTIC_SEVERITY_ERROR;
+              break;
           }
           diagnosticCallback(cSeverity, message.data(), message.size(),
                              diagnosticCallbackUserData);
@@ -581,10 +602,38 @@ bool Invocation::parseSource(Source &source) {
     return false;
   }
 
+  return true;
+}
+
+bool Invocation::parseSource(Source &source) {
+  // Use the source manager's diagnostic handler if console diagnostics
+  // are enabled.
+  if (enableConsoleDiagnosticHandler && !consoleDiagnosticHandler) {
+    consoleDiagnosticHandler.emplace(source.sourceMgr, &session.context);
+  }
+  if (!initializeInvocation()) {
+    return false;
+  }
   parsedModule =
       mlir::parseSourceFile<ModuleOp>(source.sourceMgr, &session.context);
   if (!parsedModule || failed(mlir::verify(*parsedModule))) {
     return false;
+  }
+  return true;
+}
+
+bool Invocation::importModule(OwningOpRef<Operation *> inputModule) {
+  // Take ownership of the module first so we don't have anything dangling
+  // on error.
+  parsedModule = std::move(inputModule);
+
+  if (!initializeInvocation()) {
+    return false;
+  }
+  if (enableVerifier) {
+    if (failed(mlir::verify(*parsedModule))) {
+      return false;
+    }
   }
   return true;
 }
@@ -610,7 +659,7 @@ bool Invocation::runPipeline(enum iree_compiler_pipeline_t pipeline) {
           session.bindingOptions, session.inputOptions,
           session.preprocessingOptions, session.highLevelOptimizationOptions,
           session.schedulingOptions, session.halTargetOptions,
-          session.vmTargetOptions, getHooks(), passManager, *compileToPhase);
+          session.vmTargetOptions, pipelineHooks, passManager, *compileToPhase);
       break;
     }
     case IREE_COMPILER_PIPELINE_HAL_EXECUTABLE: {
@@ -809,7 +858,13 @@ const char *ireeCompilerErrorGetMessage(iree_compiler_error_t *error) {
   return unwrap(error)->message.c_str();
 }
 
-int ireeCompilerGetAPIVersion() { return 0; }
+int ireeCompilerGetAPIVersion() {
+  static_assert(IREE_COMPILER_API_MINOR >= 0 && IREE_COMPILER_API_MINOR < 65536,
+                "illegal api minor version");
+  static_assert(IREE_COMPILER_API_MAJOR >= 0 && IREE_COMPILER_API_MAJOR < 65536,
+                "illegal api minor version");
+  return IREE_COMPILER_API_MAJOR << 16 | IREE_COMPILER_API_MINOR;
+}
 
 void ireeCompilerGetProcessCLArgs(int *argc, const char ***argv) {
 #ifdef _WIN32
@@ -869,6 +924,14 @@ void ireeCompilerGlobalInitialize() {
     abort();
   }
   globalInit = new GlobalInit();
+}
+
+const char *ireeCompilerGetRevision() {
+  if (!globalInit) {
+    fprintf(stderr, "FATAL ERROR: Not initialized\n");
+    abort();
+  }
+  return globalInit->revision.c_str();
 }
 
 void ireeCompilerGlobalShutdown() {
@@ -1086,4 +1149,18 @@ iree_compiler_error_t *ireeCompilerInvocationOutputVMCSource(
 iree_compiler_error_t *ireeCompilerInvocationOutputHALExecutable(
     iree_compiler_invocation_t *inv, iree_compiler_output_t *output) {
   return wrap(unwrap(inv)->outputHALExecutable(*unwrap(output)));
+}
+
+//===----------------------------------------------------------------------===//
+// Unstable MLIRInterop.h helpers
+//===----------------------------------------------------------------------===//
+
+MlirContext ireeCompilerSessionGetContext(iree_compiler_session_t *session) {
+  return wrap(&unwrap(session)->context);
+}
+
+bool ireeCompilerInvocationImportModule(iree_compiler_invocation_t *inv,
+                                        MlirOperation moduleOp) {
+  mlir::OwningOpRef<mlir::Operation *> cppOwnedModule(unwrap(moduleOp));
+  return unwrap(inv)->importModule(std::move(cppOwnedModule));
 }

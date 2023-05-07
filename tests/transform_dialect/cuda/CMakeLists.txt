@@ -19,8 +19,7 @@ iree_lit_test_suite(
     lit
   SRCS
     "mma.mlir"
-    "mma_reduction_layout_analysis.mlir"
-    "mma_using_layout_analysis.mlir"
+    "mma_elemwise_layout_analysis.mlir"
     "reduction.mlir"
     "reduction_eltwise.mlir"
     "reduction_v2.mlir"
@@ -36,6 +35,7 @@ iree_lit_test_suite(
     iree-opt
     iree-run-module
   DATA
+    mma_elemwise_layout_analysis_codegen_spec.mlir
     mma_reduction_layout_analysis_codegen_spec.mlir
     mma_reduction_layout_analysis_dispatch_spec.mlir
     mma_using_layout_analysis_codegen_spec.mlir
@@ -54,6 +54,30 @@ iree_lit_test_suite(
     "notsan"
     "noubsan"
     "requires-gpu-nvidia"
+    "driver=cuda"
+)
+
+iree_lit_test_suite(
+  NAME
+    sm80_lit
+  SRCS
+    "mma_reduction_layout_analysis.mlir"
+    "mma_using_layout_analysis.mlir"
+  TOOLS
+    FileCheck
+    iree-compile
+    iree-opt
+    iree-run-module
+  DATA
+    mma_reduction_layout_analysis_codegen_spec.mlir
+    mma_reduction_layout_analysis_dispatch_spec.mlir
+    mma_using_layout_analysis_codegen_spec.mlir
+  LABELS
+    "noasan"
+    "nomsan"
+    "notsan"
+    "noubsan"
+    "requires-gpu-sm80"
     "driver=cuda"
 )
 

@@ -53,7 +53,8 @@ LinalgExt::FuseProducersOp::apply(transform::TransformResults &transformResults,
     // Apply the pattern.
     SimplePatternRewriter rewriter(target);
     FailureOr<LinalgExt::FusionResult> result =
-        pattern.returningMatchAndRewrite(target, rewriter);
+        pattern.returningMatchAndRewrite(cast<TilingInterface>(target),
+                                         rewriter);
     if (failed(result))
       return emitDefaultDefiniteFailure(target);
 
@@ -145,6 +146,22 @@ DiagnosedSilenceableFailure LinalgExt::RewriteForallToScfForOp::applyToOne(
   if (failed(result))
     return emitDefaultDefiniteFailure(target);
   results.push_back(*result);
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===---------------------------------------------------------------------===//
+// TileAndDecomposeAttention
+//===---------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure LinalgExt::TileAndDecomposeAttentionOp::applyToOne(
+    LinalgExt::AttentionOp attentionOp,
+    transform::ApplyToEachResultList &results,
+    transform::TransformState &state) {
+  IRRewriter rewriter(getContext());
+  SmallVector<Operation *> ops =
+      LinalgExt::tileAndDecomposeAttention(attentionOp, rewriter);
+  for (auto op : ops)
+    results.push_back(op);
   return DiagnosedSilenceableFailure::success();
 }
 

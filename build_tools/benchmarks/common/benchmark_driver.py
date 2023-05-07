@@ -10,7 +10,9 @@ import time
 from typing import List, Optional, Sequence, Set, Tuple
 from common.benchmark_suite import BenchmarkCase, BenchmarkSuite
 from common.benchmark_config import BenchmarkConfig
-from common.benchmark_definition import BenchmarkInfo, BenchmarkResults, BenchmarkRun, DeviceInfo
+from common.benchmark_definition import (BenchmarkInfo, BenchmarkResults,
+                                         BenchmarkMetrics, BenchmarkRun,
+                                         DeviceInfo)
 
 
 class BenchmarkDriver(object):
@@ -35,12 +37,12 @@ class BenchmarkDriver(object):
   def run_benchmark_case(self, benchmark_case: BenchmarkCase,
                          benchmark_results_filename: Optional[pathlib.Path],
                          capture_filename: Optional[pathlib.Path]) -> None:
-    """Runs the benchmark case and returns the results.
+    """Runs the benchmark case and serializes the results.
 
     Args:
       benchmark_case: the benchmark_case.
-      benchmark_results_filename: the path to store benchmark results.
-        Benchmarking is required if set.
+      benchmark_results_filename: the path to store the serialized
+        BenchmarkMetrics. Benchmarking is required if set.
       capture_filename: the path to store captured trace. Trace capturing is
         required if set.
 
@@ -64,8 +66,23 @@ class BenchmarkDriver(object):
       self.config.trace_capture_config.capture_tmp_dir.mkdir(parents=True,
                                                              exist_ok=True)
 
-    cpu_target_arch = self.device_info.get_iree_cpu_arch_name()
-    gpu_target_arch = self.device_info.get_iree_gpu_arch_name()
+    use_legacy_name = self.benchmark_suite.legacy_suite
+
+    target_architectures = []
+    cpu_target_arch = self.device_info.get_iree_cpu_arch_name(use_legacy_name)
+    if cpu_target_arch is None:
+      print("WARNING: Detected unsupported CPU architecture in "
+            f'"{self.device_info}", CPU benchmarking is disabled.')
+    else:
+      target_architectures.append(cpu_target_arch)
+
+    gpu_target_arch = self.device_info.get_iree_gpu_arch_name(use_legacy_name)
+    if gpu_target_arch is None:
+      print("WARNING: Detected unsupported GPU architecture in "
+            f'"{self.device_info}", GPU benchmarking is disabled.')
+    else:
+      target_architectures.append(gpu_target_arch)
+
     drivers, loaders = self.__get_available_drivers_and_loaders()
 
     for category, _ in self.benchmark_suite.list_categories():
@@ -73,8 +90,7 @@ class BenchmarkDriver(object):
           category=category,
           available_drivers=drivers,
           available_loaders=loaders,
-          cpu_target_arch_filter=f"^{cpu_target_arch}$",
-          gpu_target_arch_filter=f"^{gpu_target_arch}$",
+          target_architectures=target_architectures,
           driver_filter=self.config.driver_filter,
           mode_filter=self.config.mode_filter,
           model_name_filter=self.config.model_name_filter)
@@ -143,18 +159,18 @@ class BenchmarkDriver(object):
 
     finished_benchmarks = sorted(self.finished_benchmarks,
                                  key=lambda pair: str(pair[0]))
-    for benchmark_info, path in finished_benchmarks:
-      result_json_object = json.loads(path.read_text())
-      benchmark_run = BenchmarkRun(benchmark_info,
-                                   result_json_object["context"],
-                                   result_json_object["benchmarks"])
+    for info, path in finished_benchmarks:
+      benchmark_metrics_json_object = json.loads(path.read_text())
+      benchmark_run = BenchmarkRun(info=info,
+                                   metrics=BenchmarkMetrics.from_json_object(
+                                       benchmark_metrics_json_object))
       results.benchmarks.append(benchmark_run)
 
     return results
 
   def get_benchmark_result_filenames(self) -> Sequence[pathlib.Path]:
     """Returns the json file paths of finished benchmarks."""
-    return list(path for _, path in self.finished_benchmarks)
+    return [path for info, path in self.finished_benchmarks]
 
   def get_capture_filenames(self) -> Sequence[pathlib.Path]:
     """Returns the tracy file paths of finished captures."""
@@ -181,25 +197,28 @@ class BenchmarkDriver(object):
 
   def __get_benchmark_info_from_case(
       self, category: str, benchmark_case: BenchmarkCase) -> BenchmarkInfo:
-    if benchmark_case.run_config is None:
+    run_config = benchmark_case.run_config
+    if run_config is None:
       # TODO(#11076): Remove legacy path.
-      return BenchmarkInfo(model_name=benchmark_case.model_name,
-                           model_tags=benchmark_case.model_tags,
-                           model_source=category,
-                           bench_mode=benchmark_case.bench_mode,
-                           driver_info=benchmark_case.driver_info,
-                           device_info=self.device_info)
+      return BenchmarkInfo.build_with_legacy_name(
+          model_name=benchmark_case.model_name,
+          model_tags=benchmark_case.model_tags,
+          model_source=category,
+          bench_mode=benchmark_case.bench_mode,
+          driver_info=benchmark_case.driver_info,
+          device_info=self.device_info)
 
-    run_tags = benchmark_case.run_config.module_execution_config.tags
-    compile_tags = benchmark_case.run_config.module_generation_config.compile_config.tags
-    return BenchmarkInfo(model_name=benchmark_case.model_name,
+    run_tags = run_config.module_execution_config.tags
+    compile_tags = run_config.module_generation_config.compile_config.tags
+    return BenchmarkInfo(name=run_config.name,
+                         model_name=benchmark_case.model_name,
                          model_tags=benchmark_case.model_tags,
                          model_source=category,
                          bench_mode=run_tags,
                          compile_tags=compile_tags,
                          driver_info=benchmark_case.driver_info,
                          device_info=self.device_info,
-                         run_config_id=benchmark_case.run_config.composite_id)
+                         run_config_id=run_config.composite_id)
 
   def __get_available_drivers_and_loaders(
       self) -> Tuple[Sequence[str], Sequence[str]]:

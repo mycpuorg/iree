@@ -7,11 +7,13 @@
 #include "LLVMGPUExtensions.h"
 
 #include "iree-dialects/Dialect/LinalgTransform/SimplePatternRewriter.h"
+#include "iree-dialects/Dialect/LinalgTransform/StructuredTransformOpsExt.h"
 #include "iree/compiler/Codegen/Common/Transforms.h"
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Conversion/VectorToGPU/VectorToGPU.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -27,14 +29,9 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorDistribution.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
-#include "mlir/IR/AffineExpr.h"
-#include "mlir/IR/Attributes.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/Region.h"
-#include "mlir/IR/Visitors.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 using llvm::dbgs;
@@ -94,21 +91,22 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
 
   auto transformOp = cast<transform::TransformOpInterface>(getOperation());
 
+  Location loc = target->getLoc();
   IRRewriter rewriter(target->getContext());
+  ErrorCheckingTrackingListener listener(state, *this);
+  rewriter.setListener(&listener);
   rewriter.setInsertionPointToStart(&target.getBody().front());
   DiagnosedSilenceableFailure diag =
       mlir::transform::gpu::mapNestedForallToThreadsImpl(
           rewriter, transformOp, target, getWorkgroupDims(), getWarpDims(),
           true);
-
   if (diag.succeeded()) {
     auto newAttr = rewriter.getIndexArrayAttr(getWorkgroupDims());
     rewriter.startRootUpdate(exportOp);
     exportOp->setAttr(exportOp.getWorkgroupSizeAttrName(), newAttr);
     rewriter.finalizeRootUpdate(exportOp);
   }
-
-  return diag;
+  return listener.check(loc, std::move(diag));
 }
 
 void transform_dialect::MapNestedForallToGpuThreadsOp::getEffects(
@@ -210,7 +208,7 @@ struct VectorDistributionResult {
 };
 
 static FailureOr<VectorDistributionResult> rewriteScfIfAsWarpExecuteOnLane0(
-    PatternRewriter &rewriter, Location loc, scf::IfOp ifOp,
+    RewriterBase &rewriter, Location loc, scf::IfOp ifOp,
     int64_t workgroupSizeX, int64_t warpSize) {
   // Bail if cond is not `if (threadIdx.x == 0)`.
   FailureOr<gpu::ThreadIdOp> maybeThreadIdxxOp =
@@ -336,21 +334,27 @@ transform_dialect::VectorToWarpExecuteOnLane0Op::applyToOne(
            << warpSize << " --- the transform is not applied";
   }
 
-  SimplePatternRewriter rewriter(target);
+  Location loc = target->getLoc();
+  IRRewriter rewriter(target->getContext());
+  rewriter.setInsertionPoint(target);
+  ErrorCheckingTrackingListener listener(state, *this);
+  rewriter.setListener(&listener);
   FailureOr<VectorDistributionResult> vectorDistributionResult =
-      rewriteScfIfAsWarpExecuteOnLane0(rewriter, target->getLoc(), target,
-                                       workgroupSizeX, warpSize);
+      rewriteScfIfAsWarpExecuteOnLane0(rewriter, loc, target, workgroupSizeX,
+                                       warpSize);
   if (failed(vectorDistributionResult)) {
     // Return a silenceable failure and set the expected 1 result to
     // nullptr.
     results.assign(1, nullptr);
-    return emitDefaultSilenceableFailure(target)
-           << "scf::ifOp needs to be predicated on threadIdx.x == 0 "
-              "--- the "
-              "transform is not applied";
+    return listener.check(
+        loc, emitDefaultSilenceableFailure(target)
+                 << "scf::ifOp needs to be predicated on threadIdx.x == 0 "
+                    "--- the "
+                    "transform is not applied");
   }
+
   results.push_back(vectorDistributionResult->warpOp);
-  return DiagnosedSilenceableFailure::success();
+  return listener.check(loc);
 }
 
 //===---------------------------------------------------------------------===//
@@ -405,9 +409,8 @@ static OpOperand *getWarpResult(vector::WarpExecuteOnLane0Op warpOp,
 }
 
 namespace {
-
-/// Pattern to convert InsertElement to broadcast, this is a workaround until
-/// MultiDimReduction distribution is supported.
+/// Pattern to convert InsertElement to broadcast, this is a workaround
+/// until MultiDimReduction distribution is supported.
 class InsertElementToBroadcast final
     : public OpRewritePattern<vector::InsertElementOp> {
  public:
@@ -487,12 +490,7 @@ struct HoistSharedMemoryAlloc : public OpRewritePattern<memref::AllocOp> {
   using OpRewritePattern<memref::AllocOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(memref::AllocOp alloc,
                                 PatternRewriter &rewriter) const override {
-    auto addressSpaceAttr =
-        alloc.getType().getMemorySpace().dyn_cast<gpu::AddressSpaceAttr>();
-    if (!(addressSpaceAttr &&
-          addressSpaceAttr.getValue() !=
-              gpu::GPUDialect::getWorkgroupAddressSpace()) ||
-        alloc.getNumOperands() != 0)
+    if (!iree_compiler::hasSharedMemoryAddressSpace(alloc.getType()))
       return failure();
     auto warpParent = alloc->getParentOfType<vector::WarpExecuteOnLane0Op>();
     if (!warpParent) return failure();
@@ -609,8 +607,16 @@ transform_dialect::VectorWarpDistributionOp::applyToOne(
   vector::ShapeCastOp::getCanonicalizationPatterns(preProcessingPatterns, ctx);
   vector::BroadcastOp::getCanonicalizationPatterns(preProcessingPatterns, ctx);
   vector::ExtractOp::getCanonicalizationPatterns(preProcessingPatterns, ctx);
-  if (failed(applyPatternsAndFoldGreedily(target,
-                                          std::move(preProcessingPatterns)))) {
+  ErrorCheckingTrackingListener listener(state, *this);
+  auto checkErrors = llvm::make_scope_exit([&]() {
+    // The TrackingListener API makes checking for errors mandatory. It is safe
+    // to drop payload ops during this transform, so we can ignore all errors.
+    (void)listener.checkErrorState();
+  });
+  GreedyRewriteConfig config;
+  config.listener = &listener;
+  if (failed(applyPatternsAndFoldGreedily(
+          target, std::move(preProcessingPatterns), config))) {
     return mlir::emitDefiniteFailure(target,
                                      "multi-reduce patterns failed to apply");
   }
@@ -620,7 +626,8 @@ transform_dialect::VectorWarpDistributionOp::applyToOne(
                                           /*benefit=*/2);
   populatePropagateVectorDistribution(target, patterns,
                                       /*benefit=*/1);
-  if (failed(applyPatternsAndFoldGreedily(target, std::move(patterns)))) {
+  if (failed(
+          applyPatternsAndFoldGreedily(target, std::move(patterns), config))) {
     return mlir::emitDefiniteFailure(
         target, "warp distribution patterns failed to apply");
   }
@@ -631,7 +638,8 @@ transform_dialect::VectorWarpDistributionOp::applyToOne(
   options.warpSyncronizationFn = warpSyncronizationFn;
   populateWarpExecuteOnLane0ToScf(target, endPatterns, options,
                                   /*benefit=*/0);
-  if (failed(applyPatternsAndFoldGreedily(target, std::move(endPatterns)))) {
+  if (failed(applyPatternsAndFoldGreedily(target, std::move(endPatterns),
+                                          config))) {
     return mlir::emitDefiniteFailure(
         target, "warp execute on lane 0 to scf patterns failed to apply");
   }
@@ -670,6 +678,9 @@ transform_dialect::VectorToMMAConversionOp::applyToOne(
   }
 
   MLIRContext *ctx = target->getContext();
+  ErrorCheckingTrackingListener listener(state, *this);
+  GreedyRewriteConfig config;
+  config.listener = &listener;
 
   // Unrolling to native vector size must have previously occurred.
   // TODO: Add pattern to propagate the extract through the scf.for
@@ -677,34 +688,36 @@ transform_dialect::VectorToMMAConversionOp::applyToOne(
   RewritePatternSet patterns(ctx);
   mlir::vector::populateCastAwayVectorLeadingOneDimPatterns(patterns);
   populatePrepareVectorToMMAPatterns(patterns, getUseMmaSync());
-  if (failed(applyPatternsAndFoldGreedily(target, std::move(patterns)))) {
+  if (failed(
+          applyPatternsAndFoldGreedily(target, std::move(patterns), config))) {
     target->emitOpError("vector to mma preparation patterns failed to apply");
     return emitDefaultDefiniteFailure(target);
   }
 
-  IRRewriter rewriter(getContext());
+  Location loc = target->getLoc();
+  IRRewriter rewriter(target->getContext());
+  rewriter.setListener(&listener);
+  auto diag = DiagnosedSilenceableFailure::success();
   if (getUseWmma()) {
-    if (failed(convertVectorToMMAOps(rewriter, target))) {
-      target->emitOpError("vector to wmma patterns failed to apply");
-      return emitDefaultDefiniteFailure(target);
-    }
-    return DiagnosedSilenceableFailure::success();
+    if (failed(convertVectorToMMAOps(rewriter, target)))
+      diag = emitDefiniteFailure("vector to wmma patterns failed to apply");
+    return listener.check(loc, std::move(diag));
   }
 
   if (failed(convertVectorToNVVMCompatibleMMASync(rewriter, funcOp))) {
     target->emitOpError("vector to mma patterns failed to apply");
-    return emitDefaultDefiniteFailure(target);
+    return listener.check(loc, emitDefaultDefiniteFailure(target));
   }
   // Using TF32 for Float.
   RewritePatternSet f32ToTF32patterns(funcOp.getContext());
   nvgpu::populateMmaSyncF32ToTF32Patterns(f32ToTF32patterns,
                                           nvgpu::MmaSyncF32Lowering::TF32);
-  if (failed(applyPatternsAndFoldGreedily(getOperation(),
-                                          std::move(f32ToTF32patterns)))) {
+  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(f32ToTF32patterns),
+                                          config))) {
     target->emitOpError("vector to mma F32ToTF32 patterns failed to apply");
-    return emitDefaultDefiniteFailure(target);
+    return listener.check(loc, emitDefaultDefiniteFailure(target));
   }
-  return DiagnosedSilenceableFailure::success();
+  return listener.check(loc, std::move(diag));
 }
 
 //===----------------------------------------------------------------------===//
@@ -714,6 +727,7 @@ transform_dialect::VectorToMMAConversionOp::applyToOne(
 DiagnosedSilenceableFailure transform_dialect::PromoteOperandsOp::applyToOne(
     Operation *target, transform::ApplyToEachResultList &results,
     transform::TransformState &state) {
+  Location loc = target->getLoc();
   IRRewriter rewriter(getContext());
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(target);
@@ -725,8 +739,7 @@ DiagnosedSilenceableFailure transform_dialect::PromoteOperandsOp::applyToOne(
   for (int64_t index : indices) {
     if ((index >= 0) && (index < numOperands)) {
       FailureOr<Value> ret = bufferization::allocateTensorForShapedValue(
-          rewriter, target->getLoc(), target->getOperand(index), false, options,
-          true);
+          rewriter, loc, target->getOperand(index), false, options, true);
       if (failed(ret)) {
         return emitDefaultDefiniteFailure(target)
                << "failed to promote operand";
@@ -771,8 +784,13 @@ void transform_dialect::CreateAsyncGroupsOp::getEffects(
 DiagnosedSilenceableFailure transform_dialect::CreateAsyncGroupsOp::applyToOne(
     func::FuncOp target, transform::ApplyToEachResultList &results,
     transform::TransformState &state) {
-  iree_compiler::createAsyncGroups(cast<func::FuncOp>(target), getUseMmaSync());
-  return DiagnosedSilenceableFailure::success();
+  Location loc = target->getLoc();
+  IRRewriter rewriter(target->getContext());
+  ErrorCheckingTrackingListener listener(state, *this);
+  rewriter.setListener(&listener);
+  iree_compiler::createAsyncGroups(rewriter, cast<func::FuncOp>(target),
+                                   getUseMmaSync());
+  return listener.check(loc);
 }
 
 //===---------------------------------------------------------------------===//
@@ -785,6 +803,18 @@ transform_dialect::LayoutAnalysisAndDistributionOp::applyToOne(
   IRRewriter rewriter(getContext());
   iree_compiler::doLayoutAnalysisAndDistribution(rewriter,
                                                  cast<func::FuncOp>(target));
+  results.push_back(target);
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===---------------------------------------------------------------------===//
+// ReorderTransposeOp
+//===---------------------------------------------------------------------===//
+DiagnosedSilenceableFailure transform_dialect::ReorderTransposeOp::applyToOne(
+    func::FuncOp target, transform::ApplyToEachResultList &results,
+    transform::TransformState &state) {
+  IRRewriter rewriter(getContext());
+  iree_compiler::reorderTranspose(rewriter, cast<func::FuncOp>(target));
   results.push_back(target);
   return DiagnosedSilenceableFailure::success();
 }

@@ -29,6 +29,7 @@ iree_cc_library(
     "SPIRVBreakDownLargeVector.cpp"
     "SPIRVCreateFastSlowPath.cpp"
     "SPIRVDistribute.cpp"
+    "SPIRVEmulateBf16.cpp"
     "SPIRVEmulateI64.cpp"
     "SPIRVEraseStorageBufferStaticShape.cpp"
     "SPIRVLowerExecutableTargetPass.cpp"
@@ -46,6 +47,8 @@ iree_cc_library(
     IREELinalgExtDialect
     IREELinalgExtPasses
     IREELinalgExtTransforms
+    IREELinalgTransformDialect
+    IREELinalgTransformDialectPasses
     LLVMSupport
     MLIRAffineAnalysis
     MLIRAffineDialect
@@ -57,6 +60,8 @@ iree_cc_library(
     MLIRArithTransforms
     MLIRArithUtils
     MLIRBufferizationDialect
+    MLIRComplexToSPIRV
+    MLIRComplexToStandard
     MLIRControlFlowToSPIRV
     MLIRFuncDialect
     MLIRFuncToSPIRV
@@ -89,6 +94,7 @@ iree_cc_library(
     MLIRTensorTransforms
     MLIRTosaDialect
     MLIRTosaToArith
+    MLIRTransformDialect
     MLIRTransforms
     MLIRVectorDialect
     MLIRVectorInterfaces
@@ -104,6 +110,7 @@ iree_cc_library(
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::HAL::IR::HALDialect
     iree::compiler::Dialect::Util::IR
+    iree::compiler::Dialect::Util::Transforms
   PUBLIC
 )
 

@@ -71,6 +71,10 @@ def FormDispatchRegions :
            /*default=*/"false", "Fuse multi-use ops">,
     Option<"generateWorkloadRegion", "genereate-workload-region", "bool",
            /*default=*/"true", "Generate workload regions of WorkgroupOps">,
+    Option<"fusePadWithConsumers", "fuse-pad-with-consumers", "bool",
+           /*default=*/"false", "Enalbe fusing pad with consumer">,
+    Option<"fusePadWithProducers", "fuse-pad-with-producers", "bool",
+           /*default=*/"false", "Enable fusion of pad with producers">
   ];
 }
 
@@ -176,6 +180,34 @@ def InjectDispatchTracing :
     InterfacePass<"iree-flow-inject-dispatch-tracing", "mlir::FunctionOpInterface"> {
   let summary = "Injects dispatch region tracing.";
   let constructor = "mlir::iree_compiler::IREE::Flow::createInjectDispatchTracingPass()";
+}
+
+def InsertDebugTargetAtSymbol :
+    Pass<"iree-flow-insert-debug-target-at-symbol", "mlir::ModuleOp"> {
+  let summary = "Crops and/or traces the program at the specified symbol";
+  let constructor = "mlir::iree_compiler::IREE::Flow::createInsertDebugTargetAtSymbolPass()";
+  let options = [
+    Option<"breakDebugTarget", "break-debug-target", "std::string",
+           /*default=*/"",
+           "Symbol at which to insert a break in the program.">,
+    Option<"traceDebugTarget", "trace-debug-target", "std::string",
+           /*default=*/"",
+           "Symbol to insert iree.flow.trace ops around.">
+  ];
+}
+
+def InsertDebugTargetAtOrdinal :
+    Pass<"iree-flow-insert-debug-target-at-ordinal", "mlir::ModuleOp"> {
+  let summary = "Crops and/or traces the program at the specified ordinal";
+  let constructor = "mlir::iree_compiler::IREE::Flow::createInsertDebugTargetAtOrdinalPass()";
+  let options = [
+    Option<"breakDebugTarget", "break-debug-target", "std::string",
+           /*default=*/"",
+           "Ordinal at which to insert a break in the program.">,
+    Option<"traceDebugTarget", "trace-debug-target", "std::string",
+           /*default=*/"",
+           "Ordinal to insert iree.flow.trace ops around.">
+  ];
 }
 
 def InterchangeGenericOps :

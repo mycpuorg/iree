@@ -6,8 +6,9 @@
 
 #include "iree/compiler/Codegen/Passes.h"
 
+#include "iree-dialects/Dialect/LinalgExt/Passes/Passes.h"
 #include "iree/compiler/Codegen/Dialect/LoweringConfig.h"
-#include "iree/compiler/Codegen/Sandbox/Passes.h"
+#include "mlir/Pass/PassManager.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -20,7 +21,6 @@ namespace {
 void registerCodegenPasses() {
   // Generated.
   registerPasses();
-  registerSandboxPasses();
 
   static PassPipelineRegistration<> LinalgLLVMPipeline(
       "iree-codegen-linalg-to-llvm-pipeline",
@@ -82,6 +82,16 @@ LogicalResult verifyLoweringConfiguration(
       break;
   }
   return success();
+}
+
+void addCommonTargetExecutablePreprocessingPasses(OpPassManager &passManager) {
+  passManager.addNestedPass<func::FuncOp>(createTypePropagationPass());
+  passManager.addPass(createBubbleUpOrdinalOpsPass());
+  passManager.addPass(createBufferizeCopyOnlyDispatchesPass());
+  passManager.addNestedPass<func::FuncOp>(
+      IREE::LinalgExt::createDecomposeSoftmaxPass());
+  // Temporary solution to avoid large allocations due to softmax lowering.
+  passManager.addNestedPass<func::FuncOp>(createRematerializeParallelOpsPass());
 }
 
 }  // namespace iree_compiler

@@ -13,7 +13,7 @@
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/Transforms/Transforms.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -100,7 +100,8 @@ static MatmulTileParams chooseMatmulTileParams(MatmulType type,
 struct LLVMCPUMaterializeEncodingPass
     : public LLVMCPUMaterializeEncodingBase<LLVMCPUMaterializeEncodingPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<arith::ArithDialect, AffineDialect, IREE::Flow::FlowDialect,
+    registry.insert<arith::ArithDialect, affine::AffineDialect,
+                    IREE::Flow::FlowDialect,
                     IREE::LinalgExt::IREELinalgExtDialect>();
   }
   void runOnOperation() override;

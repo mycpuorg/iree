@@ -85,8 +85,6 @@ struct TileWorkgroupSizePair {
   int64_t pipelineDepth;
 };
 
-// Software pipeline depths
-constexpr unsigned softwarePipelineDepthTensorCore = 4;
 // Simt codegen does not do software pipelining.
 constexpr unsigned softwarePipelineDepthSimt = 0;
 }  // namespace
@@ -129,7 +127,7 @@ static void getTensorCoreConfig(
   } else {
     if (parallelDim >= kLargDimThreashold * kLargDimThreashold) {
       tileSizes.push_back(
-          TileWorkgroupSizePair({{128, 256, 32}, {128, 2, 1}, 3}));
+          TileWorkgroupSizePair({{128, 256, 16}, {128, 2, 1}, 4}));
     }
     tileSizes.push_back(TileWorkgroupSizePair({{32, 32, 16}, {64, 2, 1}, 4}));
     tileSizes.push_back(TileWorkgroupSizePair({{16, 32, 16}, {64, 1, 1}, 4}));
@@ -562,6 +560,8 @@ static LogicalResult setRootDefaultConfig(func::FuncOp entryPoint,
         vectorSize = 1;
         int64_t id = 0;
         for (int64_t dim : llvm::reverse(shape)) {
+          // Unit loops are already skipped.
+          if (dim == 1) continue;
           if (dim < flatWG) {
             skipInnerTiling++;
             workgroupSize[id] = dim;
@@ -640,9 +640,9 @@ static std::optional<int64_t> getLinalgDimSize(linalg::LinalgOp op, int64_t d) {
 }
 
 /// Set configuration for reduction transform dialect based strategy.
-static LogicalResult setReductionTransformDialectConfig(
-    func::FuncOp entryPoint, linalg::LinalgOp op,
-    const TargetInfo &targetInfo) {
+static LogicalResult setTransformDialectConfig(func::FuncOp entryPoint,
+                                               Operation *op,
+                                               const TargetInfo &targetInfo) {
   if (!clGPUCodegenTransformDialectFileName.empty() &&
       clGPUEnableTransformDialectJit) {
     return entryPoint.emitError()
@@ -654,7 +654,6 @@ static LogicalResult setReductionTransformDialectConfig(
       clGPUCodegenTransformDialectFileName.empty()) {
     return failure();
   }
-  if (!targetInfo.hasWarpShuffle) return failure();
 
   // Transform script file provided, use it.
   auto translationInfo = IREE::Codegen::TranslationInfoAttr::get(
@@ -664,11 +663,13 @@ static LogicalResult setReductionTransformDialectConfig(
     return setTranslationInfo(entryPoint, translationInfo);
   }
 
+  // TODO: unify the target informations into one structure.
   iree_compiler::gpu::GPUModel gpuModel;
-  if (failed(iree_compiler::gpu::matchAndSetReductionStrategy(entryPoint, op,
+  gpuModel.hasWarpShuffle = targetInfo.hasWarpShuffle;
+  gpuModel.hasTF32TensorCore = targetInfo.hasTF32TensorCore;
+  if (failed(iree_compiler::gpu::matchAndSetTransformStrategy(entryPoint, op,
                                                               gpuModel)))
     return failure();
-
   return setTranslationInfo(entryPoint, translationInfo);
 }
 
@@ -916,7 +917,7 @@ static LogicalResult setConvolutionConfig(linalg::LinalgOp linalgOp,
   int64_t residualTilingFactor = bestTilingFactor;
 
   SmallVector<int64_t, 3> workgroupSize(3, 1);  // (X, Y, Z)
-  SmallVector<int64_t> workgroupTileSizes(4, 0);
+  SmallVector<int64_t> workgroupTileSizes(4, 1);
 
   if (isNCHW) {
     // OW -> x, OH -> y, OC -> z
@@ -986,11 +987,12 @@ static LogicalResult setRootConfig(func::FuncOp entryPointFn,
     // bypass the heuristic.
     return setUserConfig(entryPointFn, computeOp, compilationInfo);
   }
+  // First try to see if there is a transform dialect configuration existing.
+  if (succeeded(
+          setTransformDialectConfig(entryPointFn, computeOp, targetInfo))) {
+    return success();
+  }
   if (auto linalgOp = dyn_cast<linalg::LinalgOp>(computeOp)) {
-    if (succeeded(setReductionTransformDialectConfig(entryPointFn, linalgOp,
-                                                     targetInfo))) {
-      return success();
-    }
     if (succeeded(setContractConfig(entryPointFn, linalgOp, targetInfo))) {
       return success();
     }

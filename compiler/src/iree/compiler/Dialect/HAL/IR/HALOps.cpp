@@ -640,6 +640,28 @@ Value DeviceQueueAllocaOp::getResultSize(unsigned idx) {
   return getResultSize();
 }
 
+static LogicalResult verifyDeviceQueueFences(Operation *queueOp,
+                                             Value waitFence,
+                                             Value signalFence) {
+  if (waitFence == signalFence) {
+    return queueOp->emitOpError() << "device queue operations cannot wait and "
+                                     "signal on the same fence";
+  }
+  return success();
+}
+
+LogicalResult DeviceQueueAllocaOp::verify() {
+  return verifyDeviceQueueFences(*this, getWaitFence(), getSignalFence());
+}
+
+LogicalResult DeviceQueueDeallocaOp::verify() {
+  return verifyDeviceQueueFences(*this, getWaitFence(), getSignalFence());
+}
+
+LogicalResult DeviceQueueExecuteOp::verify() {
+  return verifyDeviceQueueFences(*this, getWaitFence(), getSignalFence());
+}
+
 //===----------------------------------------------------------------------===//
 // hal.executable
 //===----------------------------------------------------------------------===//
@@ -974,7 +996,8 @@ void ExecutableConstantBlockOp::print(OpAsmPrinter &p) {
   ArrayRef<Type> argTypes = getArgumentTypes();
   ArrayRef<Type> resultTypes = getResultTypes();
   mlir::function_interface_impl::printFunctionSignature(
-      p, op, argTypes, /*isVariadic=*/false, resultTypes);
+      p, cast<FunctionOpInterface>(op), argTypes, /*isVariadic=*/false,
+      resultTypes);
   p << " as ";
   if (resultTypes.size() != 1) p << '(';
   llvm::interleaveComma(getKeys().getValue(), p,

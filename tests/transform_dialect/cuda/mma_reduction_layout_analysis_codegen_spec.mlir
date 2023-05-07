@@ -6,7 +6,7 @@ transform.sequence failures(propagate) {
   // Step 1. Find the fill, matmul and generic ops
   // ===========================================================================
   %fill = transform.structured.match ops{["linalg.fill"]} in %variant_op : (!pdl.operation) -> !pdl.operation
-  %matmul = transform.structured.match ops{["linalg.matmul"]} in %variant_op : (!pdl.operation) -> !pdl.operation
+  %matmul = transform.structured.match ops{["linalg.matmul_transpose_b"]} in %variant_op : (!pdl.operation) -> !pdl.operation
   %generics = transform.structured.match ops{["linalg.generic"]} in %variant_op : (!pdl.operation) -> !pdl.operation
   %reduce, %broadcast = transform.split_handles %generics in [2] : (!pdl.operation) -> (!pdl.operation, !pdl.operation)
 
@@ -14,6 +14,7 @@ transform.sequence failures(propagate) {
   // ===========================================================================
   %forall_grid, %grid_reduction =
   transform.structured.tile_to_forall_op %broadcast tile_sizes [16] ( mapping = [#gpu.block<x>] )
+  transform.iree.populate_workgroup_count_region_using_num_threads_slice %forall_grid : (!pdl.operation) -> ()
   transform.structured.fuse_into_containing_op %reduce into %forall_grid
   transform.structured.fuse_into_containing_op %matmul into %forall_grid
   transform.structured.fuse_into_containing_op %fill into %forall_grid

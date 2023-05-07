@@ -32,10 +32,14 @@ iree_cc_library(
     "LLVMCPUMaterializeEncodingPass.cpp"
     "LLVMCPUMmt4dVectorLowering.cpp"
     "LLVMCPUPeel.cpp"
+    "LLVMCPUSplitReduction.cpp"
     "LLVMCPUSynchronizeSymbolVisibility.cpp"
     "LLVMCPUTensorPad.cpp"
+    "LLVMCPUTile.cpp"
     "LLVMCPUTileAndFuse.cpp"
     "LLVMCPUUnfuseFMAOps.cpp"
+    "LLVMCPUVectorLowering.cpp"
+    "LLVMCPUVectorization.cpp"
     "Passes.cpp"
     "TargetMLTransformInfo.cpp"
     "Utils.cpp"
@@ -51,6 +55,7 @@ iree_cc_library(
     LLVMTargetParser
     MLIRAffineDialect
     MLIRAffineToStandard
+    MLIRAffineUtils
     MLIRAnalysis
     MLIRArithDialect
     MLIRArithToLLVM
@@ -84,12 +89,14 @@ iree_cc_library(
     MLIRSCFDialect
     MLIRSCFToControlFlow
     MLIRSCFTransforms
+    MLIRSCFUtils
     MLIRTensorDialect
     MLIRTensorTransforms
     MLIRTosaDialect
     MLIRTosaToArith
     MLIRTransformDialect
     MLIRTransforms
+    MLIRValueBoundsOpInterface
     MLIRVectorDialect
     MLIRVectorToLLVM
     MLIRVectorToSCF
@@ -99,8 +106,8 @@ iree_cc_library(
     iree::compiler::Codegen::Common::CommonPasses
     iree::compiler::Codegen::Dialect::IREECodegenDialect
     iree::compiler::Codegen::Interfaces::PartitionableLoopsInterface
+    iree::compiler::Codegen::Interfaces::UKernelOpInterface
     iree::compiler::Codegen::PassHeaders
-    iree::compiler::Codegen::Sandbox
     iree::compiler::Codegen::TransformDialectStrategies::CPU::TransformDialectStrategies
     iree::compiler::Codegen::Transforms
     iree::compiler::Codegen::Utils
@@ -110,6 +117,7 @@ iree_cc_library(
     iree::compiler::Dialect::HAL::IR::HALDialect
     iree::compiler::Dialect::HAL::Utils
     iree::compiler::Dialect::Util::IR
+    iree::compiler::Dialect::Util::Transforms
     iree::compiler::Utils
     iree::schemas::instruments
   PUBLIC

@@ -137,8 +137,8 @@ struct ConstantOpTypeConversion
     auto newAttrType = RankedTensorType::get(attrType.getShape(),
                                              legalizedElementType.value());
     auto newAttr = DenseElementsAttr::get(newAttrType, legalizedValues);
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(constantOp, newAttr,
-                                                   newAttrType);
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(constantOp, newAttrType,
+                                                   newAttr);
     return success();
   }
 };
@@ -414,7 +414,10 @@ struct TypePropagationPass : public TypePropagationBase<TypePropagationPass> {
         ConstantOpTypeConversion, ForwardSourceType<arith::ExtUIOp>,
         ForwardSourceType<arith::TruncIOp>, GenericOpTypePropagation,
         LinalgFillTypePropagation, LegalizeResultElementType,
-        NamedOpTypePropagation<linalg::MatmulOp>, TensorExtractTypePropagation>(
+        NamedOpTypePropagation<linalg::BatchMatmulOp>,
+        NamedOpTypePropagation<linalg::MatmulOp>,
+        NamedOpTypePropagation<linalg::MatvecOp>,
+        NamedOpTypePropagation<linalg::DotOp>, TensorExtractTypePropagation>(
         typeConverter, context);
 
     ConversionTarget target(*context);

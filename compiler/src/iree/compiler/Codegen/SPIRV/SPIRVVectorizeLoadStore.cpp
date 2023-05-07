@@ -135,7 +135,8 @@ static unsigned isMemRefVectorizable(Value value,
   auto memrefType = value.getType().dyn_cast<MemRefType>();
 
   // Require scalar element type
-  if (!memrefType || memrefType.getElementType().isa<VectorType>()) {
+  if (!memrefType || (!memrefType.getElementType().isa<IntegerType>() &&
+                      !memrefType.getElementType().isa<FloatType>())) {
     LLVM_DEBUG(llvm::dbgs() << "failed: not (scalar) memref\n");
     return 0;
   }
@@ -410,8 +411,24 @@ MemRefConversionPattern<OpTy>::getVectorizedMemRefType(
   if (newShape.back() % ratio != 0) return {};
   newShape.back() = newShape.back() / ratio;
 
-  return MemRefType::get(newShape, vectorType, MemRefLayoutAttrInterface(),
-                         type.getMemorySpace());
+  MemRefLayoutAttrInterface layout = {};
+  if (auto stridedLayout = type.getLayout().dyn_cast<StridedLayoutAttr>()) {
+    auto offset = stridedLayout.getOffset();
+    if (offset != ShapedType::kDynamic) {
+      offset = offset / ratio;
+    }
+
+    auto strides = llvm::to_vector(stridedLayout.getStrides());
+    for (auto [index, stride] : llvm::enumerate(llvm::drop_end(strides))) {
+      if (index == strides.size() - 1 || stride == ShapedType::kDynamic) {
+        continue;
+      }
+      strides[index] = stride / ratio;
+    }
+    layout = StridedLayoutAttr::get(rewriter.getContext(), offset, strides);
+  }
+
+  return MemRefType::get(newShape, vectorType, layout, type.getMemorySpace());
 }
 
 template <typename OpTy>
@@ -433,7 +450,7 @@ FailureOr<SmallVector<Value>> MemRefConversionPattern<OpTy>::adjustIndices(
   unsigned ratio = *vectorMemrefElemSize / *scalarMemrefElemSize;
   Value valueRatio = rewriter.create<arith::ConstantIndexOp>(loc, ratio);
   auto newIndices = llvm::to_vector(indices);
-  newIndices.back() = rewriter.create<AffineApplyOp>(
+  newIndices.back() = rewriter.create<affine::AffineApplyOp>(
       loc, divMap, ValueRange{indices.back(), valueRatio});
   return newIndices;
 }
@@ -494,11 +511,6 @@ struct ProcessSubgroupMMALoad final
     auto vectorMemrefType =
         adaptor.getSrcMemref().getType().dyn_cast<MemRefType>();
 
-    if (!vectorMemrefType.getLayout().isIdentity()) {
-      return rewriter.notifyMatchFailure(loadOp,
-                                         "non-identity memref unsupported");
-    }
-
     Location loc = loadOp.getLoc();
     auto indices = adjustIndices(scalarMemrefType, vectorMemrefType,
                                  adaptor.getIndices(), rewriter, loc);
@@ -531,11 +543,6 @@ struct ProcessSubgroupMMAStore final
         storeOp.getDstMemref().getType().dyn_cast<MemRefType>();
     auto vectorMemrefType =
         adaptor.getDstMemref().getType().dyn_cast<MemRefType>();
-
-    if (!vectorMemrefType.getLayout().isIdentity()) {
-      return rewriter.notifyMatchFailure(storeOp,
-                                         "non-identity memref unsupported");
-    }
 
     Location loc = storeOp.getLoc();
     auto indices = adjustIndices(scalarMemrefType, vectorMemrefType,
@@ -611,7 +618,7 @@ struct ScalarizeVectorTransferRead final
         loc, vectorType, rewriter.getZeroAttr(vectorType));
     for (int i = 0; i < vectorType.getDimSize(0); ++i) {
       Value iVal = rewriter.create<arith::ConstantIndexOp>(loc, i);
-      indices[dimPos] = rewriter.create<AffineApplyOp>(
+      indices[dimPos] = rewriter.create<affine::AffineApplyOp>(
           loc, addMap, ValueRange{oldIndex, iVal});
       Value scalar =
           rewriter.create<memref::LoadOp>(loc, readOp.getSource(), indices);
@@ -653,7 +660,7 @@ struct ScalarizeVectorLoad final : public OpRewritePattern<vector::LoadOp> {
         loc, vectorType, rewriter.getZeroAttr(vectorType));
     for (int i = 0; i < vectorType.getDimSize(0); ++i) {
       Value iVal = rewriter.create<arith::ConstantIndexOp>(loc, i);
-      indices[dimPos] = rewriter.create<AffineApplyOp>(
+      indices[dimPos] = rewriter.create<affine::AffineApplyOp>(
           loc, addMap, ValueRange{oldIndex, iVal});
       Value scalar =
           rewriter.create<memref::LoadOp>(loc, loadOp.getBase(), indices);
@@ -697,7 +704,7 @@ struct ScalarizeVectorTransferWrite final
     Value oldIndex = indices[dimPos];
     for (int i = 0; i < vectorType.getDimSize(0); ++i) {
       Value iVal = rewriter.create<arith::ConstantIndexOp>(loc, i);
-      indices[dimPos] = rewriter.create<AffineApplyOp>(
+      indices[dimPos] = rewriter.create<affine::AffineApplyOp>(
           loc, addMap, ValueRange{oldIndex, iVal});
       Value scalar =
           rewriter.create<vector::ExtractOp>(loc, writeOp.getVector(), i);
@@ -712,7 +719,7 @@ struct ScalarizeVectorTransferWrite final
 class SPIRVVectorizeLoadStorePass final
     : public SPIRVVectorizeLoadStoreBase<SPIRVVectorizeLoadStorePass> {
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<AffineDialect, memref::MemRefDialect>();
+    registry.insert<affine::AffineDialect, memref::MemRefDialect>();
   }
 
   void runOnOperation() override;

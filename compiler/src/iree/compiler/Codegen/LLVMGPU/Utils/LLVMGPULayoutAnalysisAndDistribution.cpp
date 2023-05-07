@@ -9,6 +9,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -109,12 +110,12 @@ static std::array<Dimension, 3> getMMADimensions(MMAType mmaType,
                    {DimType::VecIdY, 2}}};
         case MMAMatrixType::BMatrix:
           if (dim == 0)
-            return {{{DimType::VecIdX, 2},
-                     {DimType::LaneIdX, 4},
-                     {DimType::VecIdY, 2}}};
-          return {{{DimType::LaneIdY, 8},
-                   {DimType::LaneIdZ, 1},
-                   {DimType::VecIdZ, 1}}};
+            return {{{DimType::LaneIdY, 8},
+                     {DimType::LaneIdZ, 1},
+                     {DimType::VecIdZ, 1}}};
+          return {{{DimType::VecIdX, 2},
+                   {DimType::LaneIdX, 4},
+                   {DimType::VecIdY, 2}}};
         case MMAMatrixType::CMatrix:
           if (dim == 0)
             return {{{DimType::LaneIdY, 8},
@@ -138,6 +139,7 @@ static std::array<int, 2> getMMACanonicalShape(MMAType mmaType,
         case MMAMatrixType::AMatrix:
           return {16, 16};
         case MMAMatrixType::BMatrix:
+          return {8, 16};
         case MMAMatrixType::CMatrix:
           return {16, 8};
       }
@@ -180,7 +182,7 @@ AffineExpr Layout::computeDim(int i, const DimArray &state,
   AffineExpr d0, d1, d2;
   bindDims(builder.getContext(), d0, d1, d2);
   AffineExpr dim = builder.getAffineConstantExpr(0);
-  AffineExpr dimScale = builder.getAffineConstantExpr(1.0);
+  AffineExpr dimScale = builder.getAffineConstantExpr(1);
   for (const auto &dimType : order[i]) {
     switch (dimType) {
       case DimType::LaneIdX:
@@ -232,8 +234,8 @@ static MMAType getMMAType(ArrayRef<int64_t> aShape, ArrayRef<int64_t> bShape,
   return MMAType::NONE;
 }
 
-void setMMALayout(Value aMatrix, Value bMatrix, Value cMatrix,
-                  DenseMap<Value, Layout> &layoutMap) {
+static void setMMALayout(Value aMatrix, Value bMatrix, Value cMatrix,
+                         Value dMatrix, DenseMap<Value, Layout> &layoutMap) {
   // First determine which variant of MMA this op is most suitable for
   auto aType = aMatrix.getType().cast<ShapedType>();
   auto bType = aMatrix.getType().cast<ShapedType>();
@@ -261,9 +263,10 @@ void setMMALayout(Value aMatrix, Value bMatrix, Value cMatrix,
   setLayout(aMatrix, MMAMatrixType::AMatrix, "aMatrix");
   setLayout(bMatrix, MMAMatrixType::BMatrix, "bMatrix");
   setLayout(cMatrix, MMAMatrixType::CMatrix, "cMatrix");
+  setLayout(dMatrix, MMAMatrixType::CMatrix, "dMatrix");
 }
 
-void propagateLayoutToReduceBroadcastTranspose(
+static void propagateLayoutToReduceBroadcastTranspose(
     vector::MultiDimReductionOp reductionOp, vector::BroadcastOp broadcastOp,
     vector::TransposeOp transposeOp, DenseMap<Value, Layout> &layoutMap) {
   if (!broadcastOp) return;
@@ -306,9 +309,15 @@ void propagateLayoutToReduceBroadcastTranspose(
   Value transposedResult = transposeOp.getResult();
   layoutMap.try_emplace(transposedResult, layoutMap.at(reductionSrc));
   layoutMap.at(transposedResult).debugPrint("transposed");
+  // Propagate 2D layout to 1D accumulator
+  Value acc = reductionOp.getAcc();
+  if (layoutMap.count(acc)) return;
+  Layout accLayout = layoutMap.at(reductionSrc);
+  accLayout.rank = 1;
+  layoutMap.try_emplace(acc, accLayout);
 }
 
-std::tuple<vector::BroadcastOp, vector::TransposeOp>
+static std::tuple<vector::BroadcastOp, vector::TransposeOp>
 checkForReduceBroadcastTranspose(vector::MultiDimReductionOp reductionOp) {
   vector::BroadcastOp broadcastOp{nullptr};
   vector::TransposeOp transposeOp{nullptr};
@@ -327,20 +336,186 @@ checkForReduceBroadcastTranspose(vector::MultiDimReductionOp reductionOp) {
   return std::make_tuple(broadcastOp, transposeOp);
 }
 
-void propagateLayout(Operation *op, DenseMap<Value, Layout> &layoutMap) {
+static void propagateLayoutToFor(scf::ForOp forOp,
+                                 DenseMap<Value, Layout> &layoutMap) {
+  for (auto argIndex : llvm::enumerate(forOp.getRegionIterArgs())) {
+    BlockArgument &arg = argIndex.value();
+    if (!layoutMap.count(arg)) continue;
+    OpOperand &operand = forOp.getOpOperandForRegionIterArg(arg);
+    Value result = forOp.getResult(argIndex.index());
+    Layout newLayout = layoutMap.at(arg);
+    layoutMap.try_emplace(operand.get(), newLayout);
+    layoutMap.try_emplace(result, newLayout);
+    layoutMap.at(operand.get()).debugPrint("for operand");
+    layoutMap.at(result).debugPrint("for result");
+  }
+}
+
+static void propagateLayoutToOthers(SmallVectorImpl<Value> &operands,
+                                    DenseMap<Value, Layout> &layoutMap) {
+  int numOperands = operands.size();
+  // Find an operand with a layout
+  int i;
+  for (i = 0; i < numOperands; i++) {
+    if (layoutMap.count(operands[i])) break;
+  }
+  // Propagate layout to others
+  for (int j = 0; j < numOperands; j++) {
+    if (j == i) continue;
+    if (!layoutMap.count(operands[j])) {
+      layoutMap.try_emplace(operands[j], layoutMap.at(operands[i]));
+      layoutMap.at(operands[j]).debugPrint("binary/unary operand");
+    } else {
+      assert(layoutMap.at(operands[i]) == layoutMap.at(operands[j]));
+    }
+  }
+}
+
+static void propagateLayoutToElementwiseOp(Operation *op,
+                                           DenseMap<Value, Layout> &layoutMap) {
+  if (!OpTrait::hasElementwiseMappableTraits(op) || op->getNumResults() != 1)
+    return;
+  auto operands = llvm::to_vector(op->getOperands());
+  operands.push_back(op->getResult(0));
+  propagateLayoutToOthers(operands, layoutMap);
+}
+
+static void propagateLayout(Operation *op, DenseMap<Value, Layout> &layoutMap) {
   if (auto reductionOp = dyn_cast<vector::MultiDimReductionOp>(op)) {
     auto [broadcastOp, transposeOp] =
         checkForReduceBroadcastTranspose(reductionOp);
     propagateLayoutToReduceBroadcastTranspose(reductionOp, broadcastOp,
                                               transposeOp, layoutMap);
   }
+  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    propagateLayoutToFor(forOp, layoutMap);
+  }
+  propagateLayoutToElementwiseOp(op, layoutMap);
 }
 
-void distributeTransferReads(vector::TransferReadOp readOp,
-                             DenseMap<Value, Layout> &layoutMap,
-                             DenseMap<Value, Value> &simdToSimtMap,
-                             OpBuilder &rewriter,
-                             SmallVectorImpl<Operation *> &ops) {
+/// Get indices of transfer op after distribution.
+static SmallVector<Value> getDistributedIndices(
+    OpBuilder &rewriter, Location loc, Layout &layout,
+    std::array<int, DimType::NumDims> &state, ArrayRef<Value> indices,
+    AffineMap permutationMap, const std::array<Value, 3> &threadIds) {
+  AffineExpr row = layout.computeDim(0, state, rewriter);
+  AffineMap rowMap = AffineMap::get(3, 0, row, rewriter.getContext());
+  std::array<Value, 2> laneOffsets;
+  laneOffsets[0] =
+      rewriter.create<affine::AffineApplyOp>(loc, rowMap, threadIds);
+  AffineExpr col = layout.computeDim(1, state, rewriter);
+  AffineMap colMap = AffineMap::get(3, 0, col, rewriter.getContext());
+  laneOffsets[1] =
+      rewriter.create<affine::AffineApplyOp>(loc, colMap, threadIds);
+  SmallVector<Value> newIndices{indices.begin(), indices.end()};
+  int64_t laneDim = 0;
+  for (AffineExpr expr : permutationMap.getResults()) {
+    auto dimExpr = expr.dyn_cast<AffineDimExpr>();
+    if (!dimExpr) continue;
+    unsigned pos = dimExpr.getPosition();
+    newIndices[pos] = rewriter.create<arith::AddIOp>(
+        loc, laneOffsets[laneDim++], newIndices[pos]);
+  }
+  return newIndices;
+}
+
+/// Return true if the read op with the given layout can be implemented using
+/// ldmatrix op.
+static bool isLdMatrixCompatible(vector::TransferReadOp readOp,
+                                 const Layout &layout) {
+  // ldMatrix requires loading from shared memory.
+  if (!hasSharedMemoryAddressSpace(
+          readOp.getSource().getType().cast<MemRefType>()))
+    return false;
+  // TODO: Can be any 16bits type.
+  if (!readOp.getVectorType().getElementType().isF16()) return false;
+  bool compatibleLayout = layout.order.back()[0] == DimType::VecIdX &&
+                          layout.shape[DimType::VecIdX] == 2 &&
+                          layout.order.back()[1] == DimType::LaneIdX &&
+                          layout.shape[DimType::LaneIdX] == 4 &&
+                          layout.shape[DimType::LaneIdY] == 8;
+  return compatibleLayout;
+}
+
+/// Return true if the permutation map requires using a transposed ldmatrix op.
+static bool isTransposedLdMatrix(AffineMap map) {
+  if (map.getNumResults() != 2) {
+    return false;
+  }
+  auto exprX = map.getResult(0).dyn_cast<AffineDimExpr>();
+  auto exprY = map.getResult(1).dyn_cast<AffineDimExpr>();
+  if (!exprX || !exprY) return false;
+  return exprX.getPosition() > exprY.getPosition();
+}
+
+/// Emit nvgpu.ldmatrix code sequence at the given offset.
+/// ldmatrix loads 8 blocks of 8 contiguous 16bits elements. The start address
+/// of each blocks are packed in 8 lanes. Therefore we first calculate the
+/// common base offset for all the lanes and we add the block offsets using
+/// `blockid = flatid %8`
+static Value emitLdMatrix(OpBuilder &rewriter, Location loc, Layout &layout,
+                          std::array<int, DimType::NumDims> &state,
+                          ArrayRef<Value> indices, AffineMap permutationMap,
+                          const std::array<Value, 3> &threadIds,
+                          Value memrefValue) {
+  bool transpose = isTransposedLdMatrix(permutationMap);
+  // First compute the vector part of the offset.
+  Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+  std::array<Value, 3> threadIdsLdMatrix = {zero, zero, zero};
+  AffineExpr row = layout.computeDim(0, state, rewriter);
+  AffineMap rowMap = AffineMap::get(3, 0, row, rewriter.getContext());
+  std::array<Value, 2> vectorOffsets;
+  vectorOffsets[0] =
+      rewriter.create<affine::AffineApplyOp>(loc, rowMap, threadIdsLdMatrix);
+  AffineExpr col = layout.computeDim(1, state, rewriter);
+  AffineMap colMap = AffineMap::get(3, 0, col, rewriter.getContext());
+  vectorOffsets[1] =
+      rewriter.create<affine::AffineApplyOp>(loc, colMap, threadIdsLdMatrix);
+
+  // Then compute the offset for each lane.
+  AffineExpr d0, d1, d2;
+  bindDims(rewriter.getContext(), d0, d1, d2);
+  AffineExpr laneIdModuloEight = (d0 + d1 * 4) % 8;
+  Value laneId = rewriter.create<affine::AffineApplyOp>(
+      loc, laneIdModuloEight, ArrayRef<Value>({threadIds[0], threadIds[1]}));
+  std::array<int, DimType::NumDims> emptyState = {0};
+  threadIdsLdMatrix = {zero, laneId, zero};
+  AffineExpr row2 = layout.computeDim(0, emptyState, rewriter);
+  AffineMap rowMap2 = AffineMap::get(3, 0, row2, rewriter.getContext());
+  std::array<Value, 2> laneOffsets;
+  laneOffsets[0] =
+      rewriter.create<affine::AffineApplyOp>(loc, rowMap2, threadIdsLdMatrix);
+  AffineExpr col2 = layout.computeDim(1, emptyState, rewriter);
+  AffineMap colMap2 = AffineMap::get(3, 0, col2, rewriter.getContext());
+  laneOffsets[1] =
+      rewriter.create<affine::AffineApplyOp>(loc, colMap2, threadIdsLdMatrix);
+  SmallVector<Value> newIndices{indices.begin(), indices.end()};
+  int64_t laneDim = 0;
+  // When transposing we need to swap the lane offsets.
+  if (transpose) {
+    std::swap(laneOffsets[0], laneOffsets[1]);
+  }
+  for (AffineExpr expr : permutationMap.getResults()) {
+    auto dimExpr = expr.dyn_cast<AffineDimExpr>();
+    if (!dimExpr) continue;
+    unsigned pos = dimExpr.getPosition();
+    newIndices[pos] = rewriter.create<arith::AddIOp>(
+        loc, vectorOffsets[laneDim], newIndices[pos]);
+    newIndices[pos] = rewriter.create<arith::AddIOp>(
+        loc, laneOffsets[laneDim++], newIndices[pos]);
+  }
+  Type vecType = VectorType::get(
+      {1, 2}, memrefValue.getType().cast<MemRefType>().getElementType());
+  Value el = rewriter.create<nvgpu::LdMatrixOp>(loc, vecType, memrefValue,
+                                                newIndices, transpose, 1);
+  return el;
+}
+
+static void distributeTransferReads(vector::TransferReadOp readOp,
+                                    DenseMap<Value, Layout> &layoutMap,
+                                    DenseMap<Value, Value> &simdToSimtMap,
+                                    OpBuilder &rewriter,
+                                    llvm::SetVector<Operation *> &ops) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(readOp);
   Value result = readOp.getResult();
@@ -349,9 +524,10 @@ void distributeTransferReads(vector::TransferReadOp readOp,
   Location loc = readOp.getLoc();
   SmallVector<Value> indices = readOp.getIndices();
   Type elementType = source.getType().cast<ShapedType>().getElementType();
-  Value threadIdX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
-  Value threadIdY = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::y);
-  Value threadIdZ = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::z);
+  std::array<Value, 3> threadIds = {
+      rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x),
+      rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::y),
+      rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::z)};
   Layout layout = layoutMap.at(result);
   auto vecType = VectorType::get(
       {layout.shape[DimType::Batch0], layout.shape[DimType::Batch1],
@@ -361,6 +537,7 @@ void distributeTransferReads(vector::TransferReadOp readOp,
   Value vector = rewriter.create<arith::ConstantOp>(
       loc, vecType, rewriter.getZeroAttr(vecType));
   std::array<int, DimType::NumDims> state;
+  bool useLdMatrix = isLdMatrixCompatible(readOp, layout);
   for (int b0 = 0; b0 < layout.shape[DimType::Batch0]; b0++) {
     state[DimType::Batch0] = b0;
     for (int b1 = 0; b1 < layout.shape[DimType::Batch1]; b1++) {
@@ -369,25 +546,24 @@ void distributeTransferReads(vector::TransferReadOp readOp,
         state[DimType::VecIdZ] = i;
         for (int j = 0; j < layout.shape[DimType::VecIdY]; j++) {
           state[DimType::VecIdY] = j;
+          if (useLdMatrix) {
+            state[DimType::VecIdX] = 0;
+            Value ld =
+                emitLdMatrix(rewriter, loc, layout, state, indices,
+                             readOp.getPermutationMap(), threadIds, source);
+            SmallVector<int64_t> offsets{
+                b0, b1, j * layout.shape[DimType::VecIdZ] + i, 0};
+            SmallVector<int64_t> strides{1, 1};
+            vector = rewriter.create<vector::InsertStridedSliceOp>(
+                loc, ld, vector, offsets, strides);
+            continue;
+          }
           for (int k = 0; k < layout.shape[DimType::VecIdX]; k++) {
             state[DimType::VecIdX] = k;
-            AffineExpr row = layout.computeDim(0, state, rewriter);
-            AffineMap rowMap = AffineMap::get(3, 0, row, rewriter.getContext());
-            Value rowIndex = rewriter.create<AffineApplyOp>(
-                loc, rowMap,
-                SmallVector<Value>{threadIdX, threadIdY, threadIdZ});
-            AffineExpr col = layout.computeDim(1, state, rewriter);
-            AffineMap colMap = AffineMap::get(3, 0, col, rewriter.getContext());
-            Value colIndex = rewriter.create<AffineApplyOp>(
-                loc, colMap,
-                SmallVector<Value>{threadIdX, threadIdY, threadIdZ});
-            if (layout.rank == 1) indices.back() = rowIndex;
-            if (layout.rank == 2) {
-              assert(indices.size() >= 2);
-              indices[indices.size() - 2] = rowIndex;
-              indices[indices.size() - 1] = colIndex;
-            }
-            Value el = rewriter.create<memref::LoadOp>(loc, source, indices);
+            SmallVector<Value> newIndices =
+                getDistributedIndices(rewriter, loc, layout, state, indices,
+                                      readOp.getPermutationMap(), threadIds);
+            Value el = rewriter.create<memref::LoadOp>(loc, source, newIndices);
             auto vectorType = VectorType::get({1}, elementType);
             Value v = rewriter.create<vector::BroadcastOp>(loc, vectorType, el);
             SmallVector<int64_t> offsets{
@@ -401,14 +577,14 @@ void distributeTransferReads(vector::TransferReadOp readOp,
     }
   }
   simdToSimtMap.try_emplace(result, vector);
-  ops.push_back(readOp);
+  ops.insert(readOp);
 }
 
-void distributeContracts(vector::ContractionOp contractOp,
-                         DenseMap<Value, Layout> &layoutMap,
-                         DenseMap<Value, Value> &simdToSimtMap,
-                         OpBuilder &rewriter,
-                         SmallVectorImpl<Operation *> &ops) {
+static void distributeContracts(vector::ContractionOp contractOp,
+                                DenseMap<Value, Layout> &layoutMap,
+                                DenseMap<Value, Value> &simdToSimtMap,
+                                OpBuilder &rewriter,
+                                llvm::SetVector<Operation *> &ops) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(contractOp);
   Value lhs = contractOp.getLhs();
@@ -418,6 +594,8 @@ void distributeContracts(vector::ContractionOp contractOp,
   Value rhs = contractOp.getRhs();
   if (!layoutMap.count(rhs)) return;
   if (!simdToSimtMap.count(rhs)) return;
+  Value acc = contractOp.getAcc();
+  if (!simdToSimtMap.count(acc)) return;
   Location loc = contractOp.getLoc();
   Value contractResult = contractOp.getResult();
   Layout lhsLayout = layoutMap.at(lhs);
@@ -435,16 +613,15 @@ void distributeContracts(vector::ContractionOp contractOp,
   int canonicalN = resultLayout.canonicalShape[1];
   int K = lhsLayout.shape[DimType::Batch1];
   int canonicalK = lhsLayout.canonicalShape[1];
-  auto cType = VectorType::get({vecShape[2], vecShape[3]}, elementType);
   for (int i = 0; i < M; i++) {
     for (int j = 0; j < N; j++) {
-      Value cMatrix = rewriter.create<arith::ConstantOp>(
-          loc, cType, rewriter.getZeroAttr(cType));
+      Value cMatrix = rewriter.create<vector::ExtractOp>(
+          loc, simdToSimtMap.at(acc), SmallVector<int64_t>{i, j});
       for (int k = 0; k < K; k++) {
         Value aMatrix = rewriter.create<vector::ExtractOp>(
             loc, simdToSimtMap.at(lhs), SmallVector<int64_t>{i, k});
         Value bMatrix = rewriter.create<vector::ExtractOp>(
-            loc, simdToSimtMap.at(rhs), SmallVector<int64_t>{k, j});
+            loc, simdToSimtMap.at(rhs), SmallVector<int64_t>{j, k});
         cMatrix = rewriter.create<nvgpu::MmaSyncOp>(
             loc, aMatrix, bMatrix, cMatrix,
             rewriter.getI64ArrayAttr({canonicalM, canonicalN, canonicalK}));
@@ -454,23 +631,24 @@ void distributeContracts(vector::ContractionOp contractOp,
     }
   }
   simdToSimtMap.try_emplace(contractResult, result);
-  ops.push_back(contractOp);
+  ops.insert(contractOp);
 }
 
-void distributeTransferWrites(vector::TransferWriteOp writeOp,
-                              DenseMap<Value, Layout> &layoutMap,
-                              DenseMap<Value, Value> &simdToSimtMap,
-                              OpBuilder &rewriter,
-                              SmallVectorImpl<Operation *> &ops) {
+static void distributeTransferWrites(vector::TransferWriteOp writeOp,
+                                     DenseMap<Value, Layout> &layoutMap,
+                                     DenseMap<Value, Value> &simdToSimtMap,
+                                     OpBuilder &rewriter,
+                                     llvm::SetVector<Operation *> &ops) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(writeOp);
   Value vector = writeOp.getVector();
   Value source = writeOp.getSource();
   Location loc = writeOp.getLoc();
   SmallVector<Value> indices = writeOp.getIndices();
-  Value threadIdX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
-  Value threadIdY = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::y);
-  Value threadIdZ = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::z);
+  std::array<Value, 3> threadIds = {
+      rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x),
+      rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::y),
+      rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::z)};
   if (!layoutMap.count(vector)) return;
   if (!simdToSimtMap.count(vector)) return;
   Layout layout = layoutMap.at(vector);
@@ -489,29 +667,16 @@ void distributeTransferWrites(vector::TransferWriteOp writeOp,
                 loc, simdToSimtMap.at(vector),
                 SmallVector<int64_t>{b0, b1,
                                      j * layout.shape[DimType::VecIdZ] + i, k});
-            AffineExpr row = layout.computeDim(0, state, rewriter);
-            AffineMap rowMap = AffineMap::get(3, 0, row, rewriter.getContext());
-            Value rowIndex = rewriter.create<AffineApplyOp>(
-                loc, rowMap,
-                SmallVector<Value>{threadIdX, threadIdY, threadIdZ});
-            AffineExpr col = layout.computeDim(1, state, rewriter);
-            AffineMap colMap = AffineMap::get(3, 0, col, rewriter.getContext());
-            Value colIndex = rewriter.create<AffineApplyOp>(
-                loc, colMap,
-                SmallVector<Value>{threadIdX, threadIdY, threadIdZ});
-            if (layout.rank == 1) indices.back() = rowIndex;
-            if (layout.rank == 2) {
-              assert(indices.size() >= 2);
-              indices[indices.size() - 2] = rowIndex;
-              indices[indices.size() - 1] = colIndex;
-            }
-            rewriter.create<memref::StoreOp>(loc, v, source, indices);
+            SmallVector<Value> newIndices =
+                getDistributedIndices(rewriter, loc, layout, state, indices,
+                                      writeOp.getPermutationMap(), threadIds);
+            rewriter.create<memref::StoreOp>(loc, v, source, newIndices);
           }
         }
       }
     }
   }
-  ops.push_back(writeOp);
+  ops.insert(writeOp);
 }
 
 static bool isLaneId(int dimType) {
@@ -553,9 +718,9 @@ using bodyType = std::function<void(std::array<int, DimType::NumDims> &)>;
 /// that are not LaneIdX, LaneIdY or LaneIdZ and executes the function body
 /// inside the innermost loop. It keeps track of the induction variables
 /// in the state array and passes them to the body function.
-void iterate(int dimType, ArrayRef<int> order,
-             std::array<int, DimType::NumDims> &state, const Layout &layout,
-             bodyType body) {
+static void iterate(int dimType, ArrayRef<int> order,
+                    std::array<int, DimType::NumDims> &state,
+                    const Layout &layout, bodyType body) {
   if (dimType == DimType::NumDims) {
     body(state);
     return;
@@ -571,11 +736,11 @@ void iterate(int dimType, ArrayRef<int> order,
   }
 }
 
-void distributeReductionBroadcastTranspose(
+static void distributeReductionBroadcastTranspose(
     vector::MultiDimReductionOp reductionOp, vector::BroadcastOp broadcastOp,
     vector::TransposeOp transposeOp, DenseMap<Value, Layout> &layoutMap,
     DenseMap<Value, Value> &simdToSimtMap, OpBuilder &rewriter,
-    SmallVectorImpl<Operation *> &ops) {
+    llvm::SetVector<Operation *> &ops) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(reductionOp);
   Value source = reductionOp.getSource();
@@ -594,10 +759,7 @@ void distributeReductionBroadcastTranspose(
   std::array<int, 4> reductionOrder = layout.order[reductionDim];
   std::array<int, 4> parallelOrder = layout.order[!reductionDim];
   Value acc = reductionOp.getAcc();
-  // TODO: Should be able to handle any accumulator type here without
-  // too many problems
-  APFloat floatValue(0.0);
-  if (!matchPattern(acc, m_ConstantFloat(&floatValue))) return;
+  if (!simdToSimtMap.count(acc)) return;
   SmallVector<int64_t> vecShape{
       layout.shape[DimType::Batch0], layout.shape[DimType::Batch1],
       layout.shape[DimType::VecIdZ] * layout.shape[DimType::VecIdY],
@@ -623,8 +785,7 @@ void distributeReductionBroadcastTranspose(
   }
 
   bodyType loopBody = [&](std::array<int, DimType::NumDims> &state) {
-    Value result = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getFloatAttr(elementType, floatValue));
+    Value result;
 
     auto reduce = [&](std::array<int, DimType::NumDims> &state) {
       Value vector = simdToSimtMap.at(source);
@@ -657,6 +818,14 @@ void distributeReductionBroadcastTranspose(
         vector = makeArithReduction(rewriter, loc, combiningKind, unpacked,
                                     vector, mask);
       }
+
+      // Since this is a broadcasted tensor, we only need to extract the 0th
+      // element
+      if (!result)
+        result = rewriter.create<vector::ExtractOp>(
+            loc, simdToSimtMap.at(acc),
+            SmallVector<int64_t>{state[DimType::Batch0], state[DimType::Batch1],
+                                 vectorOffset, 0});
 
       for (int i = 0; i < vShape[0]; i++) {
         Value v = rewriter.create<vector::ExtractOp>(loc, vector,
@@ -693,12 +862,161 @@ void distributeReductionBroadcastTranspose(
   else
     simdToSimtMap.try_emplace(broadcastOp.getResult(), output);
 
-  ops.push_back(reductionOp);
-  ops.push_back(broadcastOp);
-  if (transposeOp) ops.push_back(transposeOp);
+  ops.insert(reductionOp);
+  ops.insert(broadcastOp);
+  if (transposeOp) ops.insert(transposeOp);
 }
 
-static void eraseOps(SmallVectorImpl<Operation *> &opsToErase,
+static void replaceForOpWithNewSignature(RewriterBase &rewriter,
+                                         scf::ForOp loop,
+                                         ValueRange newIterOperands,
+                                         DenseMap<Value, Layout> &layoutMap,
+                                         DenseMap<Value, Value> &simdToSimtMap,
+                                         llvm::SetVector<Operation *> &ops) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(loop);
+
+  // Create a new loop before the existing one, with the extra operands.
+  // We will be using dummy values instead of the old operands
+  // only for those operands that are being distributed
+  SmallVector<Value> newOperands;
+  auto operands = llvm::to_vector<4>(loop.getIterOperands());
+  for (auto operand : operands) {
+    if (!layoutMap.count(operand)) {
+      newOperands.push_back(operand);
+      continue;
+    }
+    Value zero = rewriter.create<arith::ConstantOp>(
+        loop.getLoc(), rewriter.getZeroAttr(operand.getType()));
+    newOperands.push_back(zero);
+  }
+
+  newOperands.append(newIterOperands.begin(), newIterOperands.end());
+  scf::ForOp newLoop = rewriter.create<scf::ForOp>(
+      loop.getLoc(), loop.getLowerBound(), loop.getUpperBound(), loop.getStep(),
+      newOperands);
+  newLoop.getBody()->erase();
+
+  newLoop.getLoopBody().getBlocks().splice(
+      newLoop.getLoopBody().getBlocks().begin(),
+      loop.getLoopBody().getBlocks());
+  for (Value operand : newIterOperands)
+    newLoop.getBody()->addArgument(operand.getType(), operand.getLoc());
+
+  // Replace old results and propagate layouts
+  int numOldResults = loop.getNumResults();
+  for (auto it : llvm::zip(loop.getResults(),
+                           newLoop.getResults().take_front(numOldResults))) {
+    if (layoutMap.count(std::get<0>(it)))
+      layoutMap.try_emplace(std::get<1>(it), layoutMap.at(std::get<0>(it)));
+    rewriter.replaceAllUsesWith(std::get<0>(it), std::get<1>(it));
+  }
+
+  // Propagate layout + mapping from old to new block args and results
+  auto bbArgs = newLoop.getRegionIterArgs();
+  auto results = newLoop.getResults();
+  for (int i = 0; i < numOldResults; i++) {
+    if (layoutMap.count(bbArgs[i]))
+      layoutMap.try_emplace(bbArgs[i + numOldResults], layoutMap.at(bbArgs[i]));
+    simdToSimtMap.try_emplace(bbArgs[i], bbArgs[i + numOldResults]);
+    if (layoutMap.count(results[i]))
+      layoutMap.try_emplace(results[i + numOldResults],
+                            layoutMap.at(results[i]));
+    simdToSimtMap.try_emplace(results[i], results[i + numOldResults]);
+  }
+
+  ops.insert(loop);
+  return;
+}
+
+static void distributeFor(scf::ForOp forOp, DenseMap<Value, Layout> &layoutMap,
+                          DenseMap<Value, Value> &simdToSimtMap,
+                          IRRewriter &rewriter,
+                          llvm::SetVector<Operation *> &ops) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(forOp);
+
+  SmallVector<Value> newOperands;
+  for (const auto &operand : llvm::enumerate(forOp.getIterOperands())) {
+    if (!simdToSimtMap.count(operand.value())) {
+      continue;
+    }
+    newOperands.push_back(simdToSimtMap.at(operand.value()));
+  }
+  replaceForOpWithNewSignature(rewriter, forOp, newOperands, layoutMap,
+                               simdToSimtMap, ops);
+}
+
+static void distributeYield(scf::YieldOp yieldOp,
+                            DenseMap<Value, Layout> &layoutMap,
+                            DenseMap<Value, Value> &simdToSimtMap,
+                            IRRewriter &rewriter,
+                            llvm::SetVector<Operation *> &ops) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(yieldOp);
+
+  // Update yield op with additional operand
+  auto loop = cast<scf::ForOp>(yieldOp->getParentOp());
+  auto yieldOperands = llvm::to_vector<4>(yieldOp.getOperands());
+  for (const auto &operand : llvm::enumerate(yieldOp.getOperands())) {
+    if (!simdToSimtMap.count(operand.value())) continue;
+    // Replace the yield of old value with the for op argument to make it easier
+    // to remove the dead code.
+    yieldOperands[operand.index()] = loop.getIterOperands()[operand.index()];
+    yieldOperands.push_back(simdToSimtMap.at(operand.value()));
+  }
+  rewriter.create<scf::YieldOp>(yieldOp.getLoc(), yieldOperands);
+  ops.insert(yieldOp);
+}
+
+static void distributeConstants(arith::ConstantOp constantOp,
+                                DenseMap<Value, Layout> &layoutMap,
+                                DenseMap<Value, Value> &simdToSimtMap,
+                                IRRewriter &rewriter,
+                                llvm::SetVector<Operation *> &ops) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(constantOp);
+  Value constant = constantOp.getResult();
+  if (!layoutMap.count(constant)) return;
+  auto attr = constantOp.getValue().cast<DenseElementsAttr>();
+  // Only handle splat values for now
+  if (!attr.isSplat()) return;
+  Layout layout = layoutMap.at(constant);
+  Type elementType = constant.getType().cast<VectorType>().getElementType();
+  auto vType = VectorType::get(
+      {layout.shape[DimType::Batch0], layout.shape[DimType::Batch1],
+       layout.shape[DimType::VecIdZ] * layout.shape[DimType::VecIdY],
+       layout.shape[DimType::VecIdX]},
+      elementType);
+  Value result = rewriter.create<arith::ConstantOp>(
+      constantOp.getLoc(), vType,
+      DenseElementsAttr::get(vType, attr.getSplatValue<APFloat>()));
+  simdToSimtMap.try_emplace(constant, result);
+}
+
+static void distributeElementwise(Operation *op,
+                                  DenseMap<Value, Layout> &layoutMap,
+                                  DenseMap<Value, Value> &simdToSimtMap,
+                                  IRRewriter &rewriter,
+                                  llvm::SetVector<Operation *> &ops) {
+  if (!OpTrait::hasElementwiseMappableTraits(op)) return;
+  if (op->getNumResults() != 1) return;
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(op);
+  SmallVector<Value> newOperands;
+  for (auto operand : op->getOperands()) {
+    if (!simdToSimtMap.count(operand)) return;
+    newOperands.push_back(simdToSimtMap.at(operand));
+  }
+  SmallVector<Type> resultTypes{newOperands.front().getType()};
+  Operation *newOp =
+      rewriter.create(op->getLoc(), op->getName().getIdentifier(), newOperands,
+                      resultTypes, op->getAttrs());
+  simdToSimtMap.try_emplace(op->getResult(0), newOp->getResult(0));
+  ops.insert(op);
+}
+
+static void eraseOps(llvm::SetVector<Operation *> &opsToErase,
                      IRRewriter &rewriter) {
   for (int i = opsToErase.size() - 1; i >= 0; i--) {
     assert(opsToErase[i]->getUses().empty());
@@ -706,28 +1024,66 @@ static void eraseOps(SmallVectorImpl<Operation *> &opsToErase,
   }
 }
 
+static void collectOperations(Operation *rootOp,
+                              SmallVectorImpl<Operation *> &opsToTraverse) {
+  for (Region &region : rootOp->getRegions()) {
+    for (Block &block : region.getBlocks()) {
+      for (Operation &op : block.getOperations()) {
+        opsToTraverse.push_back(&op);
+        collectOperations(&op, opsToTraverse);
+      }
+    }
+  }
+}
+
 }  // namespace
+
+static bool isMatmulTransposeB(vector::ContractionOp contractOp) {
+  // Set up the parallel/reduction structure in right form.
+  using MapList = ArrayRef<ArrayRef<AffineExpr>>;
+  auto infer = [](MapList m) { return AffineMap::inferFromExprList(m); };
+  AffineExpr m, n, k;
+  bindDims(contractOp.getContext(), m, n, k);
+  auto iteratorTypes = contractOp.getIteratorTypes().getValue();
+  if (!(vector::isParallelIterator(iteratorTypes[0]) &&
+        vector::isParallelIterator(iteratorTypes[1]) &&
+        vector::isReductionIterator(iteratorTypes[2])))
+    return false;
+  SmallVector<AffineMap, 4> maps = contractOp.getIndexingMapsArray();
+  return maps == infer({{m, k}, {n, k}, {m, n}});
+}
 
 void doLayoutAnalysisAndDistribution(IRRewriter &rewriter,
                                      func::FuncOp funcOp) {
-  // First compute the layouts (set MMA layouts and propagate to rest)
+  // First walk through all the MMA ops and set their layouts
   DenseMap<Value, Layout> layoutMap;
   funcOp.walk([&](Operation *op) {
     if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
+      if (!isMatmulTransposeB(contractOp)) return WalkResult::advance();
       Value lhs = contractOp.getLhs();
       Value rhs = contractOp.getRhs();
+      Value acc = contractOp.getAcc();
       Value result = contractOp.getResult();
-      setMMALayout(lhs, rhs, result, layoutMap);
-    } else {
-      propagateLayout(op, layoutMap);
+      setMMALayout(lhs, rhs, acc, result, layoutMap);
     }
+    return WalkResult::advance();
+  });
+
+  // Next propagate the MMA layouts
+  funcOp.walk([&](Operation *op) {
+    if (auto contractOp = dyn_cast<vector::ContractionOp>(op))
+      return WalkResult::advance();
+    propagateLayout(op, layoutMap);
     return WalkResult::advance();
   });
 
   // Apply SIMD to SIMT conversion
   DenseMap<Value, Value> simdToSimtMap;
-  SmallVector<Operation *> opsToErase;
-  funcOp.walk([&](Operation *op) {
+  llvm::SetVector<Operation *> opsToErase;
+  SmallVector<Operation *> opsToTraverse;
+  collectOperations(funcOp, opsToTraverse);
+
+  for (Operation *op : opsToTraverse) {
     if (auto readOp = dyn_cast<vector::TransferReadOp>(op)) {
       distributeTransferReads(readOp, layoutMap, simdToSimtMap, rewriter,
                               opsToErase);
@@ -747,8 +1103,18 @@ void doLayoutAnalysisAndDistribution(IRRewriter &rewriter,
           reductionOp, broadcastOp, transposeOp, layoutMap, simdToSimtMap,
           rewriter, opsToErase);
     }
-    return WalkResult::advance();
-  });
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      distributeFor(forOp, layoutMap, simdToSimtMap, rewriter, opsToErase);
+    }
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+      distributeYield(yieldOp, layoutMap, simdToSimtMap, rewriter, opsToErase);
+    }
+    if (auto constantOp = dyn_cast<arith::ConstantOp>(op)) {
+      distributeConstants(constantOp, layoutMap, simdToSimtMap, rewriter,
+                          opsToErase);
+    }
+    distributeElementwise(op, layoutMap, simdToSimtMap, rewriter, opsToErase);
+  }
 
   // Erase old ops
   eraseOps(opsToErase, rewriter);

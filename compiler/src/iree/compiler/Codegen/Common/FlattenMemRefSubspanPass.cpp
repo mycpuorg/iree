@@ -43,7 +43,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
@@ -138,7 +138,7 @@ static Value createTotalElementCountValue(ShapedType type,
       dims.push_back(builder.create<arith::ConstantIndexOp>(loc, shape[i]));
     }
   }
-  return makeComposedAffineApply(builder, loc, sizeExpr, dims);
+  return affine::makeComposedAffineApply(builder, loc, sizeExpr, dims);
 }
 
 // Flattens memref allocation ops with more than 1 dimensions to 1 dimension.
@@ -255,8 +255,8 @@ struct FlattenBindingSubspan final
           rewriter, loc, byteOffset, oldType.getElementType());
       AffineExpr s0, s1;
       bindSymbols(rewriter.getContext(), s0, s1);
-      linearShape = makeComposedFoldedAffineApply(rewriter, loc, s0 + s1,
-                                                  {linearShape, elementOffset});
+      linearShape = affine::makeComposedFoldedAffineApply(
+          rewriter, loc, s0 + s1, {linearShape, elementOffset});
     }
 
     SmallVector<int64_t, 1> staticShape;
@@ -288,6 +288,32 @@ struct FlattenBindingSubspan final
     }
 
     rewriter.replaceOp(subspanOp, replacement);
+    return success();
+  }
+};
+
+/// Flatten `memref` operands and results of `memref.reinterpret_cast` op.
+// TODO(ravishankarm): For now just handle the case where the result is 0D
+// memref, and offset is 0. This is how void pointers are modeled. Generalize if
+// necessary.
+struct FlattenReinterpretCast
+    : public OpConversionPattern<memref::ReinterpretCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      memref::ReinterpretCastOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    if (op.getResultRank() != 0) {
+      return rewriter.notifyMatchFailure(
+          op, "unhandled op with non-zero rank memref return type");
+    }
+
+    if (!isConstantIntValue(op.getConstifiedMixedOffset(), 0)) {
+      return rewriter.notifyMatchFailure(op, "unhandled non-zero offset");
+    }
+
+    rewriter.updateRootInPlace(op,
+                               [&] { op->setOperand(0, adaptor.getSource()); });
     return success();
   }
 };
@@ -324,7 +350,8 @@ static Value linearizeIndices(Value sourceValue, ValueRange indices,
     // Dynamic strides/offset will create symbols. There should be none for the
     // static case.
     if (linearLayoutMap.getNumSymbols() == 0) {
-      return makeComposedAffineApply(builder, loc, linearLayoutMap, indices);
+      return affine::makeComposedAffineApply(builder, loc, linearLayoutMap,
+                                             indices);
     }
   }
 
@@ -371,7 +398,7 @@ static Value linearizeIndices(Value sourceValue, ValueRange indices,
 
   Value linearIndex = indices.front();
   for (int i = 1; i < indices.size(); ++i) {
-    linearIndex = builder.create<AffineApplyOp>(
+    linearIndex = builder.create<affine::AffineApplyOp>(
         loc, mulAddMap, ValueRange{linearIndex, dims[i], indices[i]});
   }
   return linearIndex;
@@ -601,21 +628,6 @@ struct AdjustConversionCast final
   }
 };
 
-/// Update the source operand to use the converted source.
-struct AdjustGetBasePointer final
-    : public OpConversionPattern<IREE::Codegen::GetBasePointerOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(
-      IREE::Codegen::GetBasePointerOp getBasePointerOp, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    rewriter.updateRootInPlace(getBasePointerOp, [&] {
-      getBasePointerOp->setOperand(0, adaptor.getSource());
-    });
-    return success();
-  }
-};
-
 //===----------------------------------------------------------------------===//
 // Folding Patterns
 //===----------------------------------------------------------------------===//
@@ -715,7 +727,7 @@ struct FlattenMemRefSubspanPass
   FlattenMemRefSubspanPass(const FlattenMemRefSubspanPass &pass) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<AffineDialect, memref::MemRefDialect>();
+    registry.insert<affine::AffineDialect, memref::MemRefDialect>();
   }
 
   void runOnOperation() override {
@@ -760,16 +772,15 @@ struct FlattenMemRefSubspanPass
           // Fall back to the default conversion flow.
           return std::nullopt;
         });
-    flattenPatterns
-        .add<FlattenAlloc<memref::AllocaOp>, FlattenAlloc<memref::AllocOp>,
-             FlattenGlobal, FlattenGetGlobal, LinearizeLoadIndices,
-             LinearizeMMALoadIndices, LinearizeStoreIndices,
-             LinearizeMMAStoreIndices, LinearizeTransferReadIndices,
-             LinearizeTransferWriteIndices, AdjustConversionCast,
-             AdjustGetBasePointer, FlattenSubView,
-             FoldMemRefReshape<memref::CollapseShapeOp>,
-             FoldMemRefReshape<memref::ExpandShapeOp>>(internalTypeConverter,
-                                                       context);
+    flattenPatterns.add<
+        FlattenAlloc<memref::AllocaOp>, FlattenAlloc<memref::AllocOp>,
+        FlattenGlobal, FlattenGetGlobal, FlattenReinterpretCast,
+        LinearizeLoadIndices, LinearizeMMALoadIndices, LinearizeStoreIndices,
+        LinearizeMMAStoreIndices, LinearizeTransferReadIndices,
+        LinearizeTransferWriteIndices, AdjustConversionCast, FlattenSubView,
+        FoldMemRefReshape<memref::CollapseShapeOp>,
+        FoldMemRefReshape<memref::ExpandShapeOp>>(internalTypeConverter,
+                                                  context);
 
     ConversionTarget target(*context);
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
@@ -797,6 +808,10 @@ struct FlattenMemRefSubspanPass
     target.addDynamicallyLegalOp<memref::LoadOp>([](memref::LoadOp loadOp) {
       return isRankZeroOrOneMemRef(loadOp.getMemRefType());
     });
+    target.addDynamicallyLegalOp<memref::ReinterpretCastOp>(
+        [](memref::ReinterpretCastOp castOp) {
+          return isRankZeroOrOneMemRef(castOp.getSource().getType());
+        });
     target.addDynamicallyLegalOp<gpu::SubgroupMmaLoadMatrixOp>(
         [](gpu::SubgroupMmaLoadMatrixOp loadOp) {
           return isRankZeroOrOneMemRef(loadOp.getSrcMemref().getType());
@@ -829,11 +844,6 @@ struct FlattenMemRefSubspanPass
     target.addDynamicallyLegalOp<memref::SubViewOp>([](memref::SubViewOp op) {
       return isRankZeroOrOneMemRef(op.getType());
     });
-    target.addDynamicallyLegalOp<IREE::Codegen::GetBasePointerOp>(
-        [](IREE::Codegen::GetBasePointerOp op) {
-          return isRankZeroOrOneMemRef(
-              op.getSource().getType().cast<MemRefType>());
-        });
 
     // Use partial conversion here so that we can ignore allocations created
     // by promotion and their load/store ops.

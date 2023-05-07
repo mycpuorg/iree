@@ -17,12 +17,8 @@ iree_lit_test_suite(
     "binary.mlir"
     "copy.mlir"
     "fill.mlir"
-    "matmul.mlir"
-    "mmt4d.mlir"
-    "pack.mlir"
     "query_tile_sizes.mlir"
     "unary.mlir"
-    "unpack.mlir"
   TOOLS
     FileCheck
     iree-opt

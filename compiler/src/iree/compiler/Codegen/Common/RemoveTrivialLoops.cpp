@@ -92,33 +92,10 @@ static bool isWorkgroupLoop(const LoopTilingAndDistributionInfo &info) {
   auto forOp = cast<scf::ForOp>(info.loop);
   Operation *lbOp = forOp.getLowerBound().getDefiningOp();
   if (isa<IREE::HAL::InterfaceWorkgroupIDOp>(lbOp)) return true;
-  auto applyOp = dyn_cast<AffineApplyOp>(lbOp);
+  auto applyOp = dyn_cast<affine::AffineApplyOp>(lbOp);
   return applyOp && llvm::any_of(applyOp.getMapOperands(), [](Value operand) {
            return operand.getDefiningOp<IREE::HAL::InterfaceWorkgroupIDOp>();
          });
-}
-
-/// Infer the number of workgroups from exportOp.
-static SmallVector<int64_t> getNumWorkgroup(
-    func::FuncOp funcOp, IREE::HAL::ExecutableExportOp exportOp) {
-  SmallVector<int64_t> result;
-
-  Block *body = exportOp.getWorkgroupCountBody();
-  if (!body) return result;
-
-  auto returnOp = cast<IREE::HAL::ReturnOp>(body->getTerminator());
-  assert(returnOp.getNumOperands() == 3);
-
-  for (unsigned i = 0; i < 3; ++i) {
-    Operation *defOp = returnOp.getOperand(i).getDefiningOp();
-    if (auto indexOp = dyn_cast_or_null<arith::ConstantIndexOp>(defOp)) {
-      result.push_back(indexOp.value());
-    } else {
-      return SmallVector<int64_t>();
-    }
-  }
-
-  return result;
 }
 
 static LogicalResult removeOneTripTiledLoops(func::FuncOp funcOp,
@@ -146,7 +123,7 @@ class RemoveSingleIterationLoopPass final
     if (failed(exportOp)) return;
 
     SmallVector<int64_t> workgroupSize = getWorkgroupSize(*exportOp);
-    SmallVector<int64_t> numWorkgroups = getNumWorkgroup(funcOp, *exportOp);
+    SmallVector<int64_t> numWorkgroups = getStaticNumWorkgroups(funcOp);
 
     if (failed(removeOneTripTiledLoops(funcOp, workgroupSize, numWorkgroups))) {
       return signalPassFailure();

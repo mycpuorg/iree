@@ -340,7 +340,6 @@ LLVM::LLVMStructType HALDispatchABI::getEnvironmentType(
       context, "iree_hal_executable_environment_v0_t");
   if (structType.isInitialized()) return structType;
 
-  // auto int8Type = IntegerType::get(context, 8);
   auto uint32Type = IntegerType::get(context, 32);
   auto opaquePtrType = LLVM::LLVMPointerType::get(context);
   SmallVector<Type, 4> fieldTypes;
@@ -674,11 +673,10 @@ Value HALDispatchABI::loadPushConstant(Operation *forOp, int64_t offset,
   auto loc = forOp->getLoc();
   auto constantsPtrValue =
       loadFieldValue(forOp, DispatchStateField::push_constants, builder);
-  auto offsetValue = getIndexValue(loc, offset, builder);
   auto pushConstantType = IntegerType::get(context, 32);
   Value constantPtrValue = builder.create<LLVM::GEPOp>(
       loc, constantsPtrValue.getType(), pushConstantType, constantsPtrValue,
-      offsetValue);
+      LLVM::GEPArg(int32_t(offset)));
   Value constantValue =
       builder.create<LLVM::LoadOp>(loc, pushConstantType, constantPtrValue);
   auto resultValue = castValueToType(loc, constantValue, resultType, builder);
@@ -703,11 +701,10 @@ Value HALDispatchABI::loadBindingPtr(Operation *forOp, int64_t ordinal,
   auto loc = forOp->getLoc();
   auto ptrsPtrValue =
       loadFieldValue(forOp, DispatchStateField::binding_ptrs, builder);
-  auto ordinalValue = getIndexValue(loc, ordinal, builder);
   auto elementPtrValue = builder.create<LLVM::GEPOp>(
       loc, ptrsPtrValue.getType(),
       mlir::LLVM::LLVMPointerType::get(builder.getContext()), ptrsPtrValue,
-      ordinalValue);
+      LLVM::GEPArg(int32_t(ordinal)));
   auto elementValue = builder.create<LLVM::LoadOp>(
       loc, mlir::LLVM::LLVMPointerType::get(builder.getContext()),
       elementPtrValue);
@@ -722,10 +719,10 @@ Value HALDispatchABI::loadBindingLength(Operation *forOp, int64_t ordinal,
   auto loc = forOp->getLoc();
   auto lengthsPtrValue =
       loadFieldValue(forOp, DispatchStateField::binding_lengths, builder);
-  auto ordinalValue = getIndexValue(loc, ordinal, builder);
   auto indexType = typeConverter->convertType(IndexType::get(context));
   auto elementPtrValue = builder.create<LLVM::GEPOp>(
-      loc, lengthsPtrValue.getType(), indexType, lengthsPtrValue, ordinalValue);
+      loc, lengthsPtrValue.getType(), indexType, lengthsPtrValue,
+      LLVM::GEPArg(int32_t(ordinal)));
   auto elementValue =
       builder.create<LLVM::LoadOp>(loc, indexType, elementPtrValue);
   return buildValueDI(
@@ -744,20 +741,16 @@ MemRefDescriptor HALDispatchABI::loadBinding(Operation *forOp, int64_t ordinal,
   // Load the base buffer pointer in the appropriate type (f32*, etc).
   Value basePtrValue = loadBindingPtr(forOp, ordinal, builder);
 
-  // Adjust by baseOffset (if needed).
-  if (baseOffsetValue) {
-    auto i8Type = typeConverter->convertType(builder.getI8Type());
-    basePtrValue = builder.create<LLVM::GEPOp>(
-        loc, basePtrValue.getType(), i8Type, basePtrValue, baseOffsetValue);
-  }
-
   // NOTE: if we wanted to check the range was in bounds here would be the
   // place to do it.
 
   // Construct the MemRefDescriptor type based on the information we have.
   // NOTE: we could use the binding length to clamp this/check that the
   // requested range is valid.
-  if (memRefType.hasStaticShape()) {
+  auto [strides, offset] = getStridesAndOffset(memRefType);
+  if (memRefType.hasStaticShape() &&
+      !llvm::any_of(strides, ShapedType::isDynamic) &&
+      !ShapedType::isDynamic(offset)) {
     return MemRefDescriptor::fromStaticShape(builder, loc, *typeConverter,
                                              memRefType, basePtrValue);
   } else {
@@ -769,7 +762,21 @@ MemRefDescriptor HALDispatchABI::loadBinding(Operation *forOp, int64_t ordinal,
                                         typeConverter->convertType(memRefType));
     desc.setAllocatedPtr(builder, loc, basePtrValue);
     desc.setAlignedPtr(builder, loc, basePtrValue);
-    desc.setConstantOffset(builder, loc, 0);
+    auto llvmIndexType = typeConverter->convertType(builder.getIndexType());
+    if (ShapedType::isDynamic(offset)) {
+      // The offset in the subspan is byteoffset. It is converted to element
+      // offset here. It is assumed that the byte offset is a multiple of
+      // the element type byte width.
+      int32_t elementWidth =
+          IREE::Util::getRoundedElementByteWidth(memRefType.getElementType());
+      Value elementWidthVal =
+          builder.create<LLVM::ConstantOp>(loc, llvmIndexType, elementWidth);
+      Value elementOffsetVal =
+          builder.create<LLVM::UDivOp>(loc, baseOffsetValue, elementWidthVal);
+      desc.setOffset(builder, loc, elementOffsetVal);
+    } else {
+      desc.setConstantOffset(builder, loc, offset);
+    }
 
     // Update memref descriptor shape. Dynamic dimensions can be mixed with
     // static dimensions, like [128, ?, 128].
@@ -785,12 +792,31 @@ MemRefDescriptor HALDispatchABI::loadBinding(Operation *forOp, int64_t ordinal,
     // Compute and update strides. Assume that MemRefs are row-major, that is,
     // following index linearization:
     //   x[i, j, k] = i * x.dim[1] * x.dim[2] + j * x.dim[2] + k
-    desc.setConstantStride(builder, loc, rank - 1, 1);
-    for (int i = rank - 2; i >= 0; --i) {
-      auto stride = desc.stride(builder, loc, i + 1);
-      auto dim = desc.size(builder, loc, i + 1);
-      Value strideVal = builder.create<LLVM::MulOp>(loc, stride, dim);
-      desc.setStride(builder, loc, i, strideVal);
+    if (!strides.empty()) {
+      assert(strides.back() == 1 &&
+             "unexpected non-unit stride for innermost dimension");
+      desc.setConstantStride(builder, loc, rank - 1, 1);
+      OpFoldResult currentStride = builder.getIndexAttr(1);
+      for (int i = rank - 1; i > 0; --i) {
+        if (strides[i - 1] == ShapedType::kDynamic) {
+          auto dim = desc.size(builder, loc, i);
+          Value currentStrideVal;
+          if (std::optional<int64_t> currentStrideInt =
+                  getConstantIntValue(currentStride)) {
+            currentStrideVal = builder.create<LLVM::ConstantOp>(
+                loc, llvmIndexType, currentStrideInt.value());
+          } else {
+            currentStrideVal = currentStride.get<Value>();
+          }
+          currentStride =
+              builder.create<LLVM::MulOp>(loc, currentStrideVal, dim)
+                  .getResult();
+          desc.setStride(builder, loc, i - 1, currentStride.get<Value>());
+        } else {
+          currentStride = builder.getIndexAttr(strides[i - 1]);
+          desc.setConstantStride(builder, loc, i - 1, strides[i - 1]);
+        }
+      }
     }
 
     return desc;
@@ -802,6 +828,30 @@ Value HALDispatchABI::loadProcessorID(Operation *forOp, OpBuilder &builder) {
       loadFieldValue(forOp, WorkgroupStateField::processor_id, builder);
   return buildValueDI(forOp, resultValue, "processor_id",
                       di.getBasicType(resultValue.getType()), builder);
+}
+
+Value HALDispatchABI::loadProcessorData(Operation *forOp, OpBuilder &builder) {
+  // To get a pointer to the processor data we need to track pointers all the
+  // way from the environment argument. This is redundant with loadFieldValue
+  // but that returns values instead.
+  auto loc = forOp->getLoc();
+  auto environmentPtrValue =
+      buildArgDI(forOp, /*argNum=*/0, getLocalArgument(forOp, 0), "environment",
+                 di.getPtrOf(di.getConstOf(di.getEnvironmentV0T())), builder);
+  Value processorPtrValue = builder.create<LLVM::GEPOp>(
+      loc, LLVM::LLVMPointerType::get(context),
+      LLVM::LLVMPointerType::get(environmentType), environmentPtrValue,
+      LLVM::GEPArg(int32_t(EnvironmentField::processor)),
+      /*inbounds=*/true);
+  Value processorDataPtrValue = builder.create<LLVM::GEPOp>(
+      loc, LLVM::LLVMPointerType::get(context),
+      LLVM::LLVMPointerType::get(processorType), processorPtrValue,
+      LLVM::GEPArg(int32_t(ProcessorField::data)),
+      /*inbounds=*/true);
+  return buildValueDI(forOp, processorDataPtrValue, "processor_data",
+                      di.getPtrOf(di.getConstOf(di.getArrayOf(
+                          di.getUint64T(), ProcessorDataCapacity))),
+                      builder);
 }
 
 Value HALDispatchABI::loadProcessorData(Operation *forOp, int64_t index,
@@ -888,24 +938,18 @@ std::pair<Value, Value> HALDispatchABI::loadImportFunc(Operation *forOp,
   auto loc = forOp->getLoc();
   auto funcPtrsValue =
       loadFieldValue(forOp, EnvironmentField::import_funcs, builder);
-  auto int8Type = IntegerType::get(context, 8);
-  auto uint32Type = IntegerType::get(context, 32);
-  auto int8PtrType = LLVM::LLVMPointerType::get(int8Type);
-  auto importFuncsType = LLVM::LLVMFunctionType::get(
-      uint32Type, {int8PtrType, int8PtrType, int8PtrType});
-
+  auto opaquePtrType = LLVM::LLVMPointerType::get(builder.getContext());
   auto funcPtrValue =
-      builder.create<LLVM::GEPOp>(loc, funcPtrsValue.getType(), importFuncsType,
+      builder.create<LLVM::GEPOp>(loc, funcPtrsValue.getType(), opaquePtrType,
                                   funcPtrsValue, importOrdinal);
-
   auto contextPtrsValue =
       loadFieldValue(forOp, EnvironmentField::import_contexts, builder);
-  auto contextPtrValue =
-      builder.create<LLVM::GEPOp>(loc, contextPtrsValue.getType(), int8Type,
-                                  contextPtrsValue, importOrdinal);
+  auto contextPtrValue = builder.create<LLVM::GEPOp>(
+      loc, contextPtrsValue.getType(), opaquePtrType, contextPtrsValue,
+      importOrdinal);
   return std::make_pair(
-      builder.create<LLVM::LoadOp>(loc, importFuncsType, funcPtrValue),
-      builder.create<LLVM::LoadOp>(loc, int8Type, contextPtrValue));
+      builder.create<LLVM::LoadOp>(loc, opaquePtrType, funcPtrValue),
+      builder.create<LLVM::LoadOp>(loc, opaquePtrType, contextPtrValue));
 }
 
 Value HALDispatchABI::isImportFuncAvailable(Operation *forOp,
@@ -951,7 +995,7 @@ Value HALDispatchABI::callImport(Operation *forOp, StringRef importName,
 
 SmallVector<Value> HALDispatchABI::wrapAndCallImport(
     Operation *forOp, StringRef importName, bool weak, TypeRange resultTypes,
-    ValueRange args, OpBuilder &builder) {
+    ValueRange args, ArrayRef<StringRef> extraFields, OpBuilder &builder) {
   auto loc = forOp->getLoc();
   auto context = builder.getContext();
 
@@ -960,6 +1004,14 @@ SmallVector<Value> HALDispatchABI::wrapAndCallImport(
   types.reserve(resultTypes.size() + args.size());
   for (Value arg : args) {
     types.push_back(typeConverter->convertType(arg.getType()));
+  }
+
+  // Query any extra fields that were requested and append them to the struct.
+  SmallVector<Value> extraFieldValues;
+  for (auto extraField : extraFields) {
+    auto extraFieldValue = getExtraField(forOp, extraField, builder);
+    extraFieldValues.push_back(extraFieldValue);
+    types.push_back(extraFieldValue.getType());
   }
 
   // Pack parameter structure.
@@ -972,12 +1024,18 @@ SmallVector<Value> HALDispatchABI::wrapAndCallImport(
     auto ptrStructType = LLVM::LLVMPointerType::get(context);
     Value one = builder.create<LLVM::ConstantOp>(loc, builder.getI64Type(),
                                                  builder.getIndexAttr(1));
-    paramsPtr = builder.create<LLVM::AllocaOp>(loc, ptrStructType, one,
-                                               /*alignment=*/0);
+    paramsPtr =
+        builder.create<LLVM::AllocaOp>(loc, ptrStructType, structType, one,
+                                       /*alignment=*/0);
     Value structVal = builder.create<LLVM::UndefOp>(loc, structType);
     for (int64_t i = 0, e = args.size(); i < e; ++i) {
       structVal = builder.create<LLVM::InsertValueOp>(loc, structVal, args[i],
                                                       i + resultTypes.size());
+    }
+    for (int64_t i = 0, e = extraFieldValues.size(); i < e; ++i) {
+      structVal = builder.create<LLVM::InsertValueOp>(
+          loc, structVal, extraFieldValues[i],
+          i + resultTypes.size() + args.size());
     }
     // Store into the alloca'ed descriptor.
     builder.create<LLVM::StoreOp>(loc, structVal, paramsPtr);
@@ -1082,6 +1140,18 @@ Value HALDispatchABI::loadFieldValue(Operation *forOp,
       builder.create<LLVM::LoadOp>(loc, workgroupStateType, statePtrValue);
   SmallVector<int64_t, 1> position = {int64_t(field)};
   return builder.create<LLVM::ExtractValueOp>(loc, stateValue, position);
+}
+
+Value HALDispatchABI::getExtraField(Operation *forOp, StringRef extraField,
+                                    OpBuilder &builder) {
+  if (extraField == "processor_id") {
+    return loadProcessorID(forOp, builder);
+  } else if (extraField == "processor_data") {
+    return loadProcessorData(forOp, builder);
+  } else {
+    assert(false && "unhandled extra field");
+    return {};
+  }
 }
 
 }  // namespace iree_compiler

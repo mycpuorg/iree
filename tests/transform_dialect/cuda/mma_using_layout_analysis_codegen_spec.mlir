@@ -11,8 +11,17 @@ transform.sequence failures(propagate) {
   // Step 2. Tile the matmul and fuse the fill
   // ===========================================================================
   %forall_grid, %grid_reduction =
-  transform.iree.tile_to_forall_and_workgroup_count_region %matmul tile_sizes [16] ( mapping = [#gpu.block<x>] )
+  transform.structured.tile_to_forall_op %matmul tile_sizes [16] ( mapping = [#gpu.block<x>] )
+  transform.iree.populate_workgroup_count_region_using_num_threads_slice %forall_grid : (!pdl.operation) -> ()
+
   transform.structured.fuse_into_containing_op %fill into %forall_grid
+
+  // Promote operands in order to test loading from shared memory.
+  %matmul_2 = transform.structured.match ops{["linalg.matmul"]} in %variant_op : (!pdl.operation) -> !pdl.operation
+  %promoted_matmul, %alloc_0, %alloc_1 =
+    transform.iree.promote_operands %matmul_2 [0, 1] 
+      : (!pdl.operation) -> (!pdl.operation, !pdl.operation, !pdl.operation)
+
 
   // Step 3. Vectorize
   // ===========================================================================
@@ -29,6 +38,11 @@ transform.sequence failures(propagate) {
   %variant_op_3 = transform.iree.bufferize { target_gpu } %variant_op : (!pdl.operation) -> (!pdl.operation)
   %memref_func = transform.structured.match ops{["func.func"]} in %variant_op_3 : (!pdl.operation) -> !pdl.operation
   transform.iree.erase_hal_descriptor_type_from_memref %memref_func : (!pdl.operation) -> ()
+
+  // Step 5. Pre-process the contract and transfer ops to put it in the right form.
+  // ===========================================================================
+  %func_2 = transform.structured.match ops{["func.func"]} in %variant_op_3 : (!pdl.operation) -> !pdl.operation
+  transform.iree.apply_patterns %func_2 {  prepare_vector_to_mma } : (!pdl.operation) -> ()
 
   // Step 6. Post-bufferization vector distribution
   // ===========================================================================

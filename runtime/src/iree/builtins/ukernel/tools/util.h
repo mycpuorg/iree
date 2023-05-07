@@ -7,7 +7,7 @@
 #ifndef IREE_BUILTINS_UKERNEL_TOOLS_UTIL_H_
 #define IREE_BUILTINS_UKERNEL_TOOLS_UTIL_H_
 
-#include "iree/builtins/ukernel/common.h"
+#include "iree/builtins/ukernel/api.h"
 
 // Helper to determine the length of test buffers to allocate.
 iree_uk_ssize_t iree_uk_2d_buffer_length(iree_uk_type_t type,
@@ -27,6 +27,8 @@ static inline iree_uk_random_engine_t iree_uk_random_engine_init(void) {
   return (iree_uk_random_engine_t){.state = 1};
 }
 
+iree_uk_uint32_t iree_uk_random_engine_get_uint32(iree_uk_random_engine_t* e);
+iree_uk_uint64_t iree_uk_random_engine_get_uint64(iree_uk_random_engine_t* e);
 int iree_uk_random_engine_get_0_65535(iree_uk_random_engine_t* e);
 int iree_uk_random_engine_get_0_1(iree_uk_random_engine_t* e);
 int iree_uk_random_engine_get_minus16_plus15(iree_uk_random_engine_t* e);
@@ -45,23 +47,14 @@ int iree_uk_type_pair_str(char* buf, int buf_length,
 int iree_uk_type_triple_str(char* buf, int buf_length,
                             const iree_uk_type_triple_t triple);
 
-#define IREE_UK_CPU_FEATURES_LIST_MAX_LENGTH 2
-
-typedef struct iree_uk_cpu_features_list_t {
-  int size;
-  const char* entries[IREE_UK_CPU_FEATURES_LIST_MAX_LENGTH];
-} iree_uk_cpu_features_list_t;
-
-iree_uk_cpu_features_list_t iree_uk_cpu_features_list_1(const char* feature1);
-iree_uk_cpu_features_list_t iree_uk_cpu_features_list_2(const char* feature1,
-                                                        const char* feature2);
-
-void iree_uk_make_cpu_data_for_features(
-    const iree_uk_cpu_features_list_t* cpu_features,
-    iree_uk_uint64_t* out_cpu_data_fields);
+void iree_uk_make_cpu_data_for_features(const char* cpu_features,
+                                        iree_uk_uint64_t* out_cpu_data_fields);
 
 void iree_uk_initialize_cpu_once(void);
 
 bool iree_uk_cpu_supports(const iree_uk_uint64_t* cpu_data_fields);
+
+const char* iree_uk_cpu_first_unsupported_feature(
+    const iree_uk_uint64_t* cpu_data_fields);
 
 #endif  // IREE_BUILTINS_UKERNEL_TOOLS_UTIL_H_

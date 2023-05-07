@@ -11,7 +11,7 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
-#include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/Utils/Utils.h"
 #include "mlir/IR/AffineExpr.h"
@@ -41,7 +41,7 @@ Value emptyZero(ImplicitLocOpBuilder &builder, RankedTensorType ty,
   Value empty =
       builder.create<tensor::EmptyOp>(ty.getShape(), ty.getElementType(), dyn);
 
-  Attribute attr = builder.getZeroAttr(ty.getElementType());
+  TypedAttr attr = builder.getZeroAttr(ty.getElementType());
   Value cnst = builder.create<arith::ConstantOp>(attr);
   return builder.create<linalg::FillOp>(ValueRange{cnst}, ValueRange{empty})
       .result();

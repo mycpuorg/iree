@@ -8,10 +8,12 @@
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
 #include "iree/compiler/Codegen/PassDetail.h"
 #include "iree/compiler/Codegen/Passes.h"
+#include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "mlir/Conversion/VectorToGPU/VectorToGPU.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "mlir/Dialect/NVGPU/Transforms/Transforms.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -22,14 +24,9 @@ namespace iree_compiler {
 static void swizzleSharedMemory(func::FuncOp funcOp) {
   SmallVector<memref::AllocOp> shmAllocOps;
   funcOp->walk([&](memref::AllocOp allocOp) {
-    auto memrefType = allocOp.getMemref().getType().cast<MemRefType>();
-    auto addressSpaceAttr =
-        memrefType.getMemorySpace().dyn_cast_or_null<gpu::AddressSpaceAttr>();
     // Only apply it to shared memory of input operands.
-    if (!addressSpaceAttr ||
-        addressSpaceAttr.getValue() !=
-            gpu::GPUDialect::getWorkgroupAddressSpace() ||
-        memrefType.getRank() < 3) {
+    if (!hasSharedMemoryAddressSpace(allocOp.getType()) ||
+        allocOp.getType().getRank() < 3) {
       return;
     }
     shmAllocOps.push_back(allocOp);
@@ -46,7 +43,7 @@ struct LLVMGPUVectorToGPUPass
   LLVMGPUVectorToGPUPass(GPUTensorCoreType tensorCoreType)
       : tensorCoreType(tensorCoreType) {}
   void getDependentDialects(DialectRegistry& registry) const override {
-    registry.insert<gpu::GPUDialect, nvgpu::NVGPUDialect, AffineDialect,
+    registry.insert<gpu::GPUDialect, nvgpu::NVGPUDialect, affine::AffineDialect,
                     memref::MemRefDialect>();
   }
 
@@ -86,9 +83,16 @@ struct LLVMGPUVectorToGPUPass
         return signalPassFailure();
       }
     }
-    createAsyncGroups(funcOp, targetMmaSync);
+    createAsyncGroups(rewriter, funcOp, targetMmaSync);
 
     if (targetMmaSync) {
+      // Fold subview on memory copy to enable the application of shared memory
+      // swizzling optimization.
+      RewritePatternSet pattern(funcOp.getContext());
+      memref::populateFoldMemRefAliasOpPatterns(pattern);
+      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(pattern)))) {
+        return signalPassFailure();
+      }
       swizzleSharedMemory(funcOp);
     }
   }

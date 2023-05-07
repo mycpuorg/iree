@@ -49,6 +49,12 @@ namespace IREE = mlir::iree_compiler::IREE;
 // Utils.
 //===----------------------------------------------------------------------===//
 
+static Type getComplexElementTypeOrSelf(Type ty) {
+  if (auto complex = dyn_cast_or_null<ComplexType>(ty))
+    return complex.getElementType();
+  return ty;
+}
+
 static void getEffectsImpl(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects,
@@ -186,8 +192,9 @@ LogicalResult ScatterOp::verify() {
                                      updateType.getRank()))) {
     int64_t originalDim = std::get<0>(it);
     int64_t updateDim = std::get<1>(it);
-    if (updateType.getDimSize(updateDim) >
-        originalType.getDimSize(originalDim)) {
+    if (!originalType.isDynamicDim(originalDim) &&
+        updateType.getDimSize(updateDim) >
+            originalType.getDimSize(originalDim)) {
       return op->emitOpError("shape of update value dim#")
              << updateDim << " exceeds original value at dim#" << originalDim;
     }
@@ -200,8 +207,9 @@ LogicalResult ScatterOp::verify() {
            llvm::seq<unsigned>(1, updateType.getRank() - fullSliceDims))) {
     int64_t originalDim = std::get<0>(it);
     int64_t updateDim = std::get<1>(it);
-    if (updateType.getDimSize(updateDim) >
-        originalType.getDimSize(originalDim)) {
+    if (!originalType.isDynamicDim(originalDim) &&
+        updateType.getDimSize(updateDim) >
+            originalType.getDimSize(originalDim)) {
       return op->emitOpError("indexed shape of update value dim#")
              << updateDim << " exceeds original value at dim#" << originalDim
              << " " << updateType.getDimSize(updateDim) << " "
@@ -216,7 +224,8 @@ LogicalResult ScatterOp::verify() {
   }
   Type arg0Type = body->getArgument(0).getType();
   Type arg1Type = body->getArgument(1).getType();
-  if (!arg0Type.isIntOrFloat() || !arg1Type.isIntOrFloat()) {
+  if (!getComplexElementTypeOrSelf(arg0Type).isIntOrFloat() ||
+      !getComplexElementTypeOrSelf(arg1Type).isIntOrFloat()) {
     return op->emitOpError(
         "expected region to have scalar argument of integer or float types");
   }
@@ -1214,10 +1223,10 @@ LogicalResult ReverseOp::getResultTilePosition(
     Value offset =
         getValueOrCreateConstantIndexOp(builder, loc, resultOffsets[dim]);
     Value tileSize = getValueOrCreateConstantIndexOp(builder, loc, sizes[dim]);
-    resultOffsets[dim] =
-        builder
-            .create<AffineApplyOp>(loc, map, ValueRange{size, offset, tileSize})
-            .getResult();
+    resultOffsets[dim] = builder
+                             .create<affine::AffineApplyOp>(
+                                 loc, map, ValueRange{size, offset, tileSize})
+                             .getResult();
   }
   resultSizes.assign(sizes.begin(), sizes.end());
   return success();
@@ -1772,7 +1781,7 @@ SmallVector<OpFoldResult> PackOp::getResultShape(
   bindSymbols(builder.getContext(), s0, s1);
   AffineExpr ceilDivExpr = s0.ceilDiv(s1);
   for (auto tiledDim : llvm::enumerate(innerDimsPos)) {
-    resultDims[tiledDim.value()] = makeComposedFoldedAffineApply(
+    resultDims[tiledDim.value()] = affine::makeComposedFoldedAffineApply(
         builder, loc, ceilDivExpr,
         {resultDims[tiledDim.value()], innerTileSizes[tiledDim.index()]});
   }
@@ -1872,7 +1881,7 @@ static void generatePackOpScalarImplementationBody(PackOp packOp,
       AffineExpr i, j, tile;
       bindDims(builder.getContext(), i, j);
       bindSymbols(builder.getContext(), tile);
-      OpFoldResult sourceIndex = makeComposedFoldedAffineApply(
+      OpFoldResult sourceIndex = affine::makeComposedFoldedAffineApply(
           builder, loc, i * tile + j,
           ArrayRef<OpFoldResult>{
               interchangedIvs[dim],
@@ -2030,9 +2039,10 @@ LogicalResult UnPackOp::generateScalarImplementation(OpBuilder &builder,
   inputIvsPointLoops.reserve(dimAndTileMapping.size());
   for (auto dim : llvm::seq<int64_t>(0, getOutputRank())) {
     if (dimAndTileMapping.count(dim)) {
-      DivModValue divMod = getDivMod(builder, loc, ivs[dim],
-                                     getValueOrCreateConstantIndexOp(
-                                         builder, loc, dimAndTileMapping[dim]));
+      affine::DivModValue divMod =
+          affine::getDivMod(builder, loc, ivs[dim],
+                            getValueOrCreateConstantIndexOp(
+                                builder, loc, dimAndTileMapping[dim]));
       inputIvsPointLoops.push_back(divMod.remainder);
       inputIvs.push_back(divMod.quotient);
     } else {

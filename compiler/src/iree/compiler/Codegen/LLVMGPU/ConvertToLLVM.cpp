@@ -8,6 +8,7 @@
 
 #include "iree/compiler/Codegen/PassDetail.h"
 #include "iree/compiler/Codegen/Passes.h"
+#include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
@@ -24,25 +25,6 @@
 
 namespace mlir {
 namespace iree_compiler {
-
-LogicalResult verifyLLVMConversionCompatibility(ModuleOp moduleOp) {
-  LogicalResult compatible = success();
-
-  moduleOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
-    auto memrefType = subspanOp.getType().dyn_cast<MemRefType>();
-    if (memrefType) {
-      Type elType = memrefType.getElementType();
-      if (!elType.isa<FloatType, IntegerType>()) {
-        subspanOp.emitError()
-            << "only integer and floating point element types "
-               "are supported at interface boundary";
-        compatible = failure();
-      }
-    }
-  });
-
-  return compatible;
-}
 
 void ConvertToDynamicSharedMemory(ModuleOp moduleOp) {
   SymbolTableCollection symbolTableCollection;
@@ -152,12 +134,7 @@ struct ConvertSharedMemAllocOp : public OpRewritePattern<memref::AllocOp> {
 
   LogicalResult matchAndRewrite(memref::AllocOp allocOp,
                                 PatternRewriter &rewriter) const override {
-    auto addressSpace = allocOp.getType()
-                            .getMemorySpace()
-                            .dyn_cast_or_null<gpu::AddressSpaceAttr>();
-    if (!addressSpace ||
-        addressSpace.getValue() != gpu::GPUDialect::getWorkgroupAddressSpace())
-      return failure();
+    if (!hasSharedMemoryAddressSpace(allocOp.getType())) return failure();
     ArrayRef<int64_t> shape = allocOp.getType().getShape();
     if (llvm::any_of(shape,
                      [](int64_t dim) { return dim == ShapedType::kDynamic; })) {
@@ -171,7 +148,8 @@ struct ConvertSharedMemAllocOp : public OpRewritePattern<memref::AllocOp> {
       // If no alignment specified align at least to the size of an element.
       Type elType = allocOp.getType().getElementType();
       if (auto shapeType = elType.dyn_cast<ShapedType>())
-        alignement = shapeType.getSizeInBits() / 8;
+        alignement =
+            shapeType.getNumElements() * shapeType.getElementTypeBitWidth() / 8;
       else
         alignement = elType.getIntOrFloatBitWidth() / 8;
     }
@@ -377,13 +355,11 @@ class ConvertIREEBindingSubspanOp : public ConvertToLLVMPattern {
     }
     // Add the byte offset.
     Value llvmBufferBasePtr = llvmBufferArg;
-    if (adaptor.getByteOffset()) {
-      auto i8Type = typeConverter->convertType(rewriter.getI8Type());
-      llvmBufferBasePtr = rewriter.create<LLVM::GEPOp>(
-          loc, llvmBufferBasePtr.getType(), i8Type, llvmBufferBasePtr,
-          adaptor.getByteOffset());
-    }
-    if (memrefType.hasStaticShape()) {
+
+    auto [strides, offset] = getStridesAndOffset(memrefType);
+    if (memrefType.hasStaticShape() &&
+        !llvm::any_of(strides, ShapedType::isDynamic) &&
+        !ShapedType::isDynamic(offset)) {
       auto desc = MemRefDescriptor::fromStaticShape(
           rewriter, loc, *getTypeConverter(), memrefType, llvmBufferBasePtr);
       rewriter.replaceOp(op, {desc});
@@ -397,7 +373,21 @@ class ConvertIREEBindingSubspanOp : public ConvertToLLVMPattern {
           rewriter, loc, typeConverter->convertType(memrefType));
       desc.setAllocatedPtr(rewriter, loc, llvmBufferBasePtr);
       desc.setAlignedPtr(rewriter, loc, llvmBufferBasePtr);
-      desc.setConstantOffset(rewriter, loc, 0);
+
+      auto llvmIndexType =
+          typeConverter->convertType(IndexType::get(rewriter.getContext()));
+      auto baseOffsetValue = adaptor.getByteOffset();
+      if (ShapedType::isDynamic(offset)) {
+        int32_t elementWidth =
+            IREE::Util::getRoundedElementByteWidth(memrefType.getElementType());
+        Value elementWidthVal =
+            rewriter.create<LLVM::ConstantOp>(loc, llvmIndexType, elementWidth);
+        Value elementOffsetVal = rewriter.create<LLVM::UDivOp>(
+            loc, baseOffsetValue, elementWidthVal);
+        desc.setOffset(rewriter, loc, elementOffsetVal);
+      } else {
+        desc.setConstantOffset(rewriter, loc, offset);
+      }
 
       // Update memref descriptor shape. Dynamic dimensions can be mixed with
       // static dimensions, like [128, ?, 128].
@@ -413,12 +403,31 @@ class ConvertIREEBindingSubspanOp : public ConvertToLLVMPattern {
       // Compute and update strides. Assume that MemRefs are row-major, that is,
       // following index linearization:
       //   x[i, j, k] = i * x.dim[1] * x.dim[2] + j * x.dim[2] + k
-      desc.setConstantStride(rewriter, loc, rank - 1, 1);
-      for (int i = rank - 2; i >= 0; --i) {
-        auto stride = desc.stride(rewriter, loc, i + 1);
-        auto dim = desc.size(rewriter, loc, i + 1);
-        Value strideVal = rewriter.create<LLVM::MulOp>(loc, stride, dim);
-        desc.setStride(rewriter, loc, i, strideVal);
+      if (!strides.empty()) {
+        assert(strides.back() == 1 &&
+               "unexpected non-unit stride for innermost dimension");
+        desc.setConstantStride(rewriter, loc, rank - 1, 1);
+        OpFoldResult currentStride = rewriter.getIndexAttr(1);
+        for (int i = rank - 1; i > 0; --i) {
+          if (strides[i - 1] == ShapedType::kDynamic) {
+            auto dim = desc.size(rewriter, loc, i);
+            Value currentStrideVal;
+            if (std::optional<int64_t> currentStrideInt =
+                    getConstantIntValue(currentStride)) {
+              currentStrideVal = rewriter.create<LLVM::ConstantOp>(
+                  loc, llvmIndexType, currentStrideInt.value());
+            } else {
+              currentStrideVal = currentStride.get<Value>();
+            }
+            currentStride =
+                rewriter.create<LLVM::MulOp>(loc, currentStrideVal, dim)
+                    .getResult();
+            desc.setStride(rewriter, loc, i - 1, currentStride.get<Value>());
+          } else {
+            currentStride = rewriter.getIndexAttr(strides[i - 1]);
+            desc.setConstantStride(rewriter, loc, i - 1, strides[i - 1]);
+          }
+        }
       }
       rewriter.replaceOp(op, {desc});
     }

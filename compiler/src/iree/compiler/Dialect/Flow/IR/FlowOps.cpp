@@ -9,7 +9,6 @@
 #include "iree/compiler/Dialect/Util/IR/ClosureOpUtils.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "iree/compiler/Dialect/Util/IR/UtilTypes.h"
-#include "iree/compiler/Utils/ADTExtras.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/StringExtras.h"
@@ -24,6 +23,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/FunctionImplementation.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpDefinition.h"
@@ -69,9 +69,8 @@ static LogicalResult verifyDispatchWorkload(
              << workgroupCount.getNumArguments()
              << " arguments but dispatch provides " << workload.size();
     }
-    for (auto &&[index, types] : llvm::enumerate(llvm::zip_equal(
-             workgroupCount.getArgumentTypes(), workload.getTypes()))) {
-      auto [expectedType, actualType] = types;
+    for (auto [index, expectedType, actualType] : llvm::enumerate(
+             workgroupCount.getArgumentTypes(), workload.getTypes())) {
       if (expectedType != actualType) {
         return op->emitOpError()
                << "workload operand " << index << " type mismatch; expected "
@@ -1123,6 +1122,14 @@ DispatchWorkgroupsOp::getTiedOperandsIndexAndLength() {
   return getODSOperandIndexAndLength(1);
 }
 
+SmallVector<int64_t> DispatchWorkgroupsOp::getTiedOperandsAsIntegerList() {
+  ArrayAttr attr = getTiedOperandsAttr();
+  if (!attr) return {};
+  return llvm::to_vector(llvm::map_range(attr, [](Attribute intAttr) {
+    return intAttr.cast<IntegerAttr>().getInt();
+  }));
+}
+
 //===----------------------------------------------------------------------===//
 // flow.dispatch.workgroup.*
 //===----------------------------------------------------------------------===//
@@ -1290,78 +1297,108 @@ LogicalResult DispatchOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
 }
 
 //===----------------------------------------------------------------------===//
-// flow.tensor.clone
+// flow.func
 //===----------------------------------------------------------------------===//
 
-LogicalResult TensorCloneOp::verify() {
-  if (failed(verifyOpDynamicDims(getOperation(), {getOperand()},
-                                 getArgumentDims())) ||
-      failed(verifyOpDynamicDims(getOperation(), {getResult()},
-                                 getArgumentDims()))) {
+FuncOp FuncOp::create(Location location, StringRef name, FunctionType type,
+                      ArrayRef<int64_t> tiedOperands,
+                      ArrayRef<NamedAttribute> attrs,
+                      ArrayRef<DictionaryAttr> argAttrs,
+                      ArrayRef<DictionaryAttr> resAttrs) {
+  OpBuilder builder(location->getContext());
+  OperationState state(location, getOperationName());
+  FuncOp::build(builder, state, name, type,
+                builder.getIndexArrayAttr(tiedOperands), attrs, argAttrs,
+                resAttrs);
+  return cast<FuncOp>(Operation::create(state));
+}
+
+void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
+                   FunctionType type, ArrayAttr tiedOperands,
+                   ArrayRef<NamedAttribute> attrs,
+                   ArrayRef<DictionaryAttr> argAttrs,
+                   ArrayRef<DictionaryAttr> resAttrs) {
+  state.addAttribute(SymbolTable::getSymbolAttrName(),
+                     builder.getStringAttr(name));
+  state.addAttribute(SymbolTable::getVisibilityAttrName(),
+                     builder.getStringAttr("private"));
+  state.addAttribute("function_type", TypeAttr::get(type));
+  state.attributes.append(attrs.begin(), attrs.end());
+  state.attributes.erase(IREE::Util::TiedOpInterface::getStorageAttrName());
+  state.addAttribute(IREE::Util::TiedOpInterface::getStorageAttrName(),
+                     tiedOperands);
+  state.addRegion();
+  if (!argAttrs.empty() || !resAttrs.empty()) {
+    assert(type.getNumInputs() == argAttrs.size());
+    assert(type.getNumResults() == resAttrs.size());
+    function_interface_impl::addArgAndResultAttrs(
+        builder, state, argAttrs, resAttrs, builder.getStringAttr("arg_attrs"),
+        builder.getStringAttr("res_attrs"));
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// flow.call
+//===----------------------------------------------------------------------===//
+
+void CallOp::build(OpBuilder &builder, OperationState &state,
+                   SymbolRefAttr callee, TypeRange resultTypes,
+                   ValueRange resultDims, ValueRange arguments,
+                   ValueRange argumentDims, ArrayAttr tiedOperands,
+                   ArrayRef<NamedAttribute> attributes) {
+  state.addAttribute("callee", callee);
+  state.addTypes(resultTypes);
+  state.addOperands(arguments);
+  state.addOperands(argumentDims);
+  state.addOperands(resultDims);
+  state.addAttributes(attributes);
+  state.attributes.erase(IREE::Util::TiedOpInterface::getStorageAttrName());
+  state.addAttribute(IREE::Util::TiedOpInterface::getStorageAttrName(),
+                     tiedOperands);
+  state.attributes.erase(getOperandSegmentSizeAttr());
+  state.addAttribute(getOperandSegmentSizeAttr(),
+                     builder.getDenseI32ArrayAttr({
+                         static_cast<int32_t>(arguments.size()),
+                         static_cast<int32_t>(argumentDims.size()),
+                         static_cast<int32_t>(resultDims.size()),
+                     }));
+}
+
+FunctionType CallOp::getCalleeType() {
+  auto argumentTypes = llvm::to_vector(llvm::map_range(
+      getArgOperands(), [](Value arg) { return arg.getType(); }));
+  return FunctionType::get(getContext(), argumentTypes, getResultTypes());
+}
+
+std::pair<unsigned, unsigned> CallOp::getTiedOperandsIndexAndLength() {
+  return getODSOperandIndexAndLength(0);  // $arguments
+}
+
+LogicalResult CallOp::verify() {
+  Operation *op = getOperation();
+  if (failed(verifyOpDynamicDims(op, getArguments(), getArgumentDims())) ||
+      failed(verifyOpDynamicDims(op, getResults(), getResultDims()))) {
     return failure();
   }
   return success();
 }
 
-//===----------------------------------------------------------------------===//
-// flow.tensor.empty
-//===----------------------------------------------------------------------===//
+LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  Operation *op = getOperation();
 
-LogicalResult TensorEmptyOp::verify() {
-  if (failed(verifyOpDynamicDims(getOperation(), {getResult()},
-                                 getResultDims()))) {
-    return failure();
+  auto calleeOp = symbolTable.lookupNearestSymbolFrom<IREE::Flow::FuncOp>(
+      op, getCalleeAttr());
+  if (!calleeOp) {
+    return op->emitOpError() << "undefined external call: " << getCallee();
   }
-  return success();
-}
 
-//===----------------------------------------------------------------------===//
-// flow.tensor.load
-//===----------------------------------------------------------------------===//
-
-LogicalResult TensorLoadOp::verify() {
-  if (failed(verifyOpDynamicDims(getOperation(), {getSource()},
-                                 getSourceDims()))) {
-    return failure();
+  auto expectedType = getCalleeType();
+  auto calleeType = calleeOp.getFunctionType();
+  if (calleeType != expectedType) {
+    return emitOpError("function type mismatch; expected ")
+           << expectedType << " but callee is " << calleeType;
   }
-  return success();
-}
 
-//===----------------------------------------------------------------------===//
-// flow.tensor.slice
-//===----------------------------------------------------------------------===//
-
-LogicalResult TensorSliceOp::verify() {
-  if (failed(verifyOpDynamicDims(getOperation(), {getSource()},
-                                 getSourceDims())) ||
-      failed(verifyOpDynamicDims(getOperation(), {getResult()},
-                                 getResultDims()))) {
-    return failure();
-  }
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// flow.tensor.splat
-//===----------------------------------------------------------------------===//
-
-LogicalResult TensorSplatOp::verify() {
-  if (failed(verifyOpDynamicDims(getOperation(), {getResult()},
-                                 getResultDims()))) {
-    return failure();
-  }
-  return success();
-}
-
-//===----------------------------------------------------------------------===//
-// flow.tensor.store
-//===----------------------------------------------------------------------===//
-
-LogicalResult TensorStoreOp::verify() {
-  if (failed(verifyOpDynamicDims(getOperation(), {getTarget()},
-                                 getTargetDims()))) {
-    return failure();
-  }
   return success();
 }
 
@@ -1418,6 +1455,94 @@ Value TensorReshapeOp::getTiedResult(unsigned resultIndex) {
 
 SmallVector<int64_t, 4> TensorReshapeOp::getTiedResultOperandIndices() {
   return {0};  // source
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.load
+//===----------------------------------------------------------------------===//
+
+LogicalResult TensorLoadOp::verify() {
+  if (failed(verifyOpDynamicDims(getOperation(), {getSource()},
+                                 getSourceDims()))) {
+    return failure();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.store
+//===----------------------------------------------------------------------===//
+
+LogicalResult TensorStoreOp::verify() {
+  if (failed(verifyOpDynamicDims(getOperation(), {getTarget()},
+                                 getTargetDims()))) {
+    return failure();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.alloc
+//===----------------------------------------------------------------------===//
+
+LogicalResult TensorAllocOp::verify() {
+  if (failed(verifyOpDynamicDims(getOperation(), {getResult()},
+                                 getResultDims()))) {
+    return failure();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.empty
+//===----------------------------------------------------------------------===//
+
+LogicalResult TensorEmptyOp::verify() {
+  if (failed(verifyOpDynamicDims(getOperation(), {getResult()},
+                                 getResultDims()))) {
+    return failure();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.splat
+//===----------------------------------------------------------------------===//
+
+LogicalResult TensorSplatOp::verify() {
+  if (failed(verifyOpDynamicDims(getOperation(), {getResult()},
+                                 getResultDims()))) {
+    return failure();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.clone
+//===----------------------------------------------------------------------===//
+
+LogicalResult TensorCloneOp::verify() {
+  if (failed(verifyOpDynamicDims(getOperation(), {getOperand()},
+                                 getArgumentDims())) ||
+      failed(verifyOpDynamicDims(getOperation(), {getResult()},
+                                 getArgumentDims()))) {
+    return failure();
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.slice
+//===----------------------------------------------------------------------===//
+
+LogicalResult TensorSliceOp::verify() {
+  if (failed(verifyOpDynamicDims(getOperation(), {getSource()},
+                                 getSourceDims())) ||
+      failed(verifyOpDynamicDims(getOperation(), {getResult()},
+                                 getResultDims()))) {
+    return failure();
+  }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1479,7 +1604,7 @@ struct FoldTensorLoadWithExtractSlice
     SmallVector<OpFoldResult> offsets, sizes, strides;
     // `tensor.extract_slice` (i.e. the producer) folds **into**
     // `flow.dispatch.tensor.load1 (i.e. the consumer).
-    if (failed(mergeOffsetsSizesAndStrides(
+    if (failed(affine::mergeOffsetsSizesAndStrides(
             rewriter, dispatchTensorLoadOp->getLoc(), dispatchTensorLoadOp,
             extractSliceOp, dispatchTensorLoadOp.getDroppedDims(), offsets,
             sizes, strides))) {
@@ -1523,7 +1648,7 @@ struct FoldInsertSliceWithTensorStoreOp
     SmallVector<OpFoldResult> offsets, sizes, strides;
     // `tensor.insert_slice` (i.e. the producer) folds **into**
     // `flow.dispatch.tensor.store` (i.e. the consumer).
-    if (failed(mergeOffsetsSizesAndStrides(
+    if (failed(affine::mergeOffsetsSizesAndStrides(
             rewriter, dispatchTensorStoreOp->getLoc(), dispatchTensorStoreOp,
             insertSliceOp, dispatchTensorStoreOp.getDroppedDims(), offsets,
             sizes, strides))) {
@@ -1599,7 +1724,6 @@ void CollectiveAllGatherOp::build(OpBuilder &builder, OperationState &state,
                                   Value target, Value source, Value channel) {
   auto targetDims =
       IREE::Util::buildDynamicDimsForValue(state.location, target, builder);
-
   build(builder, state, elementType, target, targetDims, source, channel,
         builder.getIndexArrayAttr({0}));
 }
@@ -1627,9 +1751,35 @@ void CollectiveAllReduceOp::build(OpBuilder &builder, OperationState &state,
                                   Value target, Value source, Value channel) {
   auto targetDims =
       IREE::Util::buildDynamicDimsForValue(state.location, target, builder);
-
   build(builder, state, reductionOp, elementType, target, targetDims, source,
         channel, builder.getIndexArrayAttr({0}));
+}
+
+//===----------------------------------------------------------------------===//
+// flow.collective.all_to_all
+//===----------------------------------------------------------------------===//
+
+Value CollectiveAllToAllOp::getTiedResult(unsigned resultIndex) {
+  return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
+}
+
+::llvm::Optional<unsigned> CollectiveAllToAllOp::getTiedResultOperandIndex(
+    unsigned resultIndex) {
+  return {0};  // target
+}
+
+SmallVector<int64_t, 4> CollectiveAllToAllOp::getTiedResultOperandIndices() {
+  return {0};  // target
+}
+
+void CollectiveAllToAllOp::build(OpBuilder &builder, OperationState &state,
+                                 CollectiveElementTypeAttr elementType,
+                                 Value target, Value source, Value channel) {
+  auto targetDims =
+      IREE::Util::buildDynamicDimsForValue(state.location, target, builder);
+
+  build(builder, state, elementType, target, targetDims, source, channel,
+        builder.getIndexArrayAttr({0}));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1657,7 +1807,6 @@ void CollectiveReduceScatterOp::build(OpBuilder &builder, OperationState &state,
                                       Value channel) {
   auto targetDims =
       IREE::Util::buildDynamicDimsForValue(state.location, target, builder);
-
   build(builder, state, reductionOp, elementType, target, targetDims, source,
         channel, builder.getIndexArrayAttr({0}));
 }

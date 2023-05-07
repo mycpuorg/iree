@@ -84,6 +84,16 @@ iree_runtime_cc_binary(
 )
 
 iree_runtime_cc_binary(
+    name = "iree-cpuinfo",
+    srcs = ["iree-cpuinfo.c"],
+    deps = [
+        "//runtime/src/iree/base",
+        "//runtime/src/iree/base/internal:cpu",
+        "//runtime/src/iree/schemas:cpu_data",
+    ],
+)
+
+iree_runtime_cc_binary(
     name = "iree-dump-instruments",
     srcs = ["iree-dump-instruments-main.c"],
     deps = [
@@ -104,6 +114,17 @@ iree_runtime_cc_binary(
         "//runtime/src/iree/base/internal/flatcc:debugging",
         "//runtime/src/iree/schemas:bytecode_module_def_c_fbs",
         "//runtime/src/iree/vm/bytecode:module",
+    ],
+)
+
+iree_runtime_cc_binary(
+    name = "iree-fatelf",
+    srcs = ["iree-fatelf.c"],
+    deps = [
+        "//runtime/src/iree/base",
+        "//runtime/src/iree/base/internal:file_io",
+        "//runtime/src/iree/base/internal:path",
+        "//runtime/src/iree/hal/local/elf:elf_module",
     ],
 )
 
@@ -134,49 +155,31 @@ cc_binary(
     srcs = ["iree-run-mlir-main.cc"],
     tags = ["hostonly"],
     deps = [
+        "//compiler/bindings/c:headers",
         "//compiler/src:defs",
-        "//compiler/src/iree/compiler/ConstEval",
-        "//compiler/src/iree/compiler/Dialect/HAL/Target",
-        "//compiler/src/iree/compiler/Dialect/VM/Target:init_targets",
-        "//compiler/src/iree/compiler/Dialect/VM/Target/Bytecode",
-        "//compiler/src/iree/compiler/Pipelines",
-        "//compiler/src/iree/compiler/Tools:init_passes_and_dialects",
-        "//compiler/src/iree/compiler/Tools:init_targets",
+        "//compiler/src/iree/compiler/API:Impl",
         "//runtime/src:runtime_defines",
         "//runtime/src/iree/base",
         "//runtime/src/iree/base:tracing",
         "//runtime/src/iree/base/internal:flags",
         "//runtime/src/iree/hal",
-        "//runtime/src/iree/modules/hal:types",
         "//runtime/src/iree/tooling:context_util",
         "//runtime/src/iree/tooling:device_util",
-        "//runtime/src/iree/tooling:vm_util",
+        "//runtime/src/iree/tooling:run_module",
         "//runtime/src/iree/vm",
-        "//runtime/src/iree/vm/bytecode:module",
-        "@llvm-project//llvm:Support",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:LLVMToLLVMIRTranslation",
-        "@llvm-project//mlir:Parser",
-        "@llvm-project//mlir:Pass",
-        "@llvm-project//mlir:Support",
-        "@llvm-project//mlir:ToLLVMIRTranslation",
     ],
 )
 
 iree_runtime_cc_binary(
     name = "iree-run-module",
-    srcs = ["iree-run-module-main.cc"],
+    srcs = ["iree-run-module-main.c"],
     deps = [
         "//runtime/src/iree/base",
         "//runtime/src/iree/base:tracing",
         "//runtime/src/iree/base/internal:flags",
         "//runtime/src/iree/hal",
-        "//runtime/src/iree/modules/hal:types",
-        "//runtime/src/iree/tooling:comparison",
         "//runtime/src/iree/tooling:context_util",
-        "//runtime/src/iree/tooling:device_util",
-        "//runtime/src/iree/tooling:instrument_util",
-        "//runtime/src/iree/tooling:vm_util",
+        "//runtime/src/iree/tooling:run_module",
         "//runtime/src/iree/vm",
     ],
 )
@@ -217,16 +220,6 @@ iree_runtime_cc_binary(
         "//runtime/src/iree/tooling:yaml_util",
         "//runtime/src/iree/vm",
         "@com_github_yaml_libyaml//:yaml",
-    ],
-)
-
-iree_runtime_cc_binary(
-    name = "iree-cpuinfo",
-    srcs = ["iree-cpuinfo.c"],
-    deps = [
-        "//runtime/src/iree/base",
-        "//runtime/src/iree/base/internal:cpu",
-        "//runtime/src/iree/schemas:cpu_data",
     ],
 )
 

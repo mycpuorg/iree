@@ -37,6 +37,7 @@
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/Interfaces/VectorInterfaces.h"
 #include "mlir/Pass/Pass.h"
@@ -350,7 +351,9 @@ class SPIRVTileToCooperativeOpsPass final
 
       RewritePatternSet canonicalizationPatterns =
           linalg::getLinalgTilingCanonicalizationPatterns(context);
-      populateFoldAffineMinInDistributedLoopsPatterns(canonicalizationPatterns);
+      SmallVector<int64_t> numWorkgroups = getStaticNumWorkgroups(funcOp);
+      populateFoldAffineMinInDistributedLoopsPatterns(canonicalizationPatterns,
+                                                      numWorkgroups);
       if (failed(applyPatternsAndFoldGreedily(
               funcOp, std::move(canonicalizationPatterns)))) {
         return signalPassFailure();
