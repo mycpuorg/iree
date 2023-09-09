@@ -62,6 +62,26 @@ def HAL_MemoryTypeBitfieldAttr :
   let cppNamespace = "mlir::iree_compiler::IREE::HAL";
 }
 
+def HAL_MemoryAccess_None                        : I32BitEnumAttrCase<"None",                         0x00000000>;
+def HAL_MemoryAccess_Read                        : I32BitEnumAttrCase<"Read",                         0x00000001>;
+def HAL_MemoryAccess_Write                       : I32BitEnumAttrCase<"Write",                        0x00000002>;
+def HAL_MemoryAccess_Discard                     : I32BitEnumAttrCase<"Discard",                      0x00000004>;
+def HAL_MemoryAccess_MayAlias                    : I32BitEnumAttrCase<"MayAlias",                     0x00000008>;
+def HAL_MemoryAccess_Unaligned                   : I32BitEnumAttrCase<"Unaligned",                    0x00000010>;
+def HAL_MemoryAccess_Any                         : I32BitEnumAttrCase<"Any",                          0x00000020>;
+def HAL_MemoryAccessBitfieldAttr :
+    I32BitEnumAttr<"MemoryAccessBitfield", "valid MemoryAccess", [
+      HAL_MemoryAccess_None,
+      HAL_MemoryAccess_Read,
+      HAL_MemoryAccess_Write,
+      HAL_MemoryAccess_Discard,
+      HAL_MemoryAccess_MayAlias,
+      HAL_MemoryAccess_Unaligned,
+      HAL_MemoryAccess_Any,
+    ]> {
+  let cppNamespace = "mlir::iree_compiler::IREE::HAL";
+}
+
 def HAL_BufferUsage_None                         : I32BitEnumAttrCase<"None",                         0x00000000>;
 def HAL_BufferUsage_TransferSource               : I32BitEnumAttrCase<"TransferSource",               0x00000001>;
 def HAL_BufferUsage_TransferTarget               : I32BitEnumAttrCase<"TransferTarget",               0x00000002>;
@@ -242,6 +262,7 @@ def HAL_CollectiveKind_Reduce : I32EnumAttrCase<"Reduce", 4, "reduce">;
 def HAL_CollectiveKind_ReduceScatter : I32EnumAttrCase<"ReduceScatter", 5, "reduce_scatter">;
 def HAL_CollectiveKind_Send : I32EnumAttrCase<"Send", 6, "send">;
 def HAL_CollectiveKind_Recv : I32EnumAttrCase<"Recv", 7, "recv">;
+def HAL_CollectiveKind_SendRecv: I32EnumAttrCase<"SendRecv", 8, "send_recv">;
 def HAL_CollectiveKindAttr :
     I32EnumAttr<"CollectiveKind", "valid CollectiveKind", [
       HAL_CollectiveKind_AllGather,
@@ -252,6 +273,7 @@ def HAL_CollectiveKindAttr :
       HAL_CollectiveKind_ReduceScatter,
       HAL_CollectiveKind_Send,
       HAL_CollectiveKind_Recv,
+      HAL_CollectiveKind_SendRecv,
     ]> {
   let cppNamespace = "::mlir::iree_compiler::IREE::HAL";
 }
@@ -301,6 +323,18 @@ def HAL_CollectiveElementTypeAttr :
       HAL_CollectiveElementType_Float64,
       HAL_CollectiveElementType_BFloat16,
     ]> {
+  let cppNamespace = "::mlir::iree_compiler::IREE::HAL";
+}
+
+def HAL_CallingConvention_Default : I32EnumAttrCase<"Default", 0>;
+def HAL_CallingConvention_ParameterStruct : I32EnumAttrCase<"ParameterStruct", 1>;
+def HAL_CallingConventionAttr :
+    I32EnumAttr<
+        "CallingConvention",
+        "Calling conversions for linked functions",[
+          HAL_CallingConvention_Default,
+          HAL_CallingConvention_ParameterStruct,
+        ]>{
   let cppNamespace = "::mlir::iree_compiler::IREE::HAL";
 }
 
@@ -408,16 +442,6 @@ def HAL_Executable : DialectType<
   let builderCall = "$_builder.getType<IREE::HAL::ExecutableType>()";
 }
 
-def HAL_PipelineLayout : DialectType<
-    HAL_Dialect,
-    CPred<"$_self.isa<IREE::HAL::PipelineLayoutType>()">,
-    "pipeline_layout"> {
-  let description = [{
-    An pipeline layout describing the descriptor sets and push constants used.
-  }];
-  let builderCall = "$_builder.getType<IREE::HAL::PipelineLayoutType>()";
-}
-
 def HAL_Fence : DialectType<
     HAL_Dialect,
     CPred<"$_self.isa<IREE::HAL::FenceType>()">,
@@ -427,6 +451,27 @@ def HAL_Fence : DialectType<
     multiple timelines.
   }];
   let builderCall = "$_builder.getType<IREE::HAL::FenceType>()";
+}
+
+def HAL_File : DialectType<
+    HAL_Dialect,
+    CPred<"$_self.isa<IREE::HAL::FileType>()">,
+    "buffer"> {
+  let description = [{
+    A stateless file handle that can be read/written using queue-ordered
+    transfer operations.
+  }];
+  let builderCall = "$_builder.getType<IREE::HAL::FileType>()";
+}
+
+def HAL_PipelineLayout : DialectType<
+    HAL_Dialect,
+    CPred<"$_self.isa<IREE::HAL::PipelineLayoutType>()">,
+    "pipeline_layout"> {
+  let description = [{
+    A pipeline layout describing the descriptor sets and push constants used.
+  }];
+  let builderCall = "$_builder.getType<IREE::HAL::PipelineLayoutType>()";
 }
 
 def HAL_ObjectType : AnyTypeOf<[
@@ -439,6 +484,7 @@ def HAL_ObjectType : AnyTypeOf<[
   HAL_Event,
   HAL_Executable,
   HAL_Fence,
+  HAL_File,
   HAL_PipelineLayout,
 ]>;
 
@@ -467,7 +513,7 @@ def HAL_HostSizeAttr : Util_IndexAttrBase<"size_t">;
 
 def HAL_TimelineValue : TypeAlias<I64>;
 
-def HAL_PrimitiveType : AnyTypeOf<[Index, AnySignlessInteger, AnyFloat]>;
+def HAL_PrimitiveType : AnyTypeOf<[Index, AnySignlessInteger, AnyFloat, AnyComplex]>;
 def HAL_FillPatternType : AnyTypeOf<[I8, I16, I32]>;
 
 def HAL_GlobalRefAttr : Util_AliasedSymbolRefAttr;
@@ -675,6 +721,35 @@ def HAL_DeviceTargetAttr :
     // the `hal.device.targets` attribute is found.
     static SmallVector<DeviceTargetAttr, 4> lookup(Operation *op);
 
+    // Returns true if there is any UnitAttr with |name| in any device
+    // configuration for the given |op|.
+    static bool lookupConfigAttrAny(Operation *op, StringRef name);
+
+    // Returns true if all device configurations found for the given |op| have
+    // a UnitAttr with |name|.
+    static bool lookupConfigAttrAll(Operation *op, StringRef name);
+
+    // Returns the AND of boolean attributes of |name| in all device
+    // configurations found for the given |op|.
+    // Returns nullopt if any config does not have the key defined indicating
+    // that it's not statically known/runtime dynamic.
+    static std::optional<bool>
+    lookupConfigAttrAnd(Operation *op, StringRef name);
+
+    // Returns the OR of boolean attributes of |name| in all device
+    // configurations found for the given |op|.
+    // Returns nullopt if any config does not have the key defined indicating
+    // that it's not statically known/runtime dynamic.
+    static std::optional<bool>
+    lookupConfigAttrOr(Operation *op, StringRef name);
+
+    // Returns the range of integer attributes of |name| in all device
+    // configurations found for the given |op|.
+    // Returns nullopt if any config does not have the key defined indicating
+    // that it's not statically known/runtime dynamic.
+    static std::optional<StaticRange<APInt>>
+    lookupConfigAttrRange(Operation *op, StringRef name);
+
     // Returns a list of all target executable configurations that may be
     // required for the given operation.
     static SmallVector<ExecutableTargetAttr, 4>
@@ -866,7 +941,7 @@ def HAL_AffinityQueueAttr : AttrDef<HAL_Dialect, "AffinityQueue", [
   let mnemonic = "affinity.queue";
   let summary = [{specifies a set of allowed queues for an operation}];
   let description = [{
-    WIP; see https://github.com/openxla/iree/issues/10765.
+    WIP; see [#10765](https://github.com/openxla/iree/issues/10765).
     This may change in the future to either be a nested attribute on a larger
     affinity struct or be defined by an implementation of the affinity attr
     interface. For now this allows higher levels of the stack to specify

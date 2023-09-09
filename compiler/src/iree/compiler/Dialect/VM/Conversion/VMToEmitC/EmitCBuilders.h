@@ -66,6 +66,9 @@ Value binaryOperator(OpBuilder builder, Location location, BinaryOperator op,
                      Value lhs, Value rhs, Type resultType);
 
 Value allocateVariable(OpBuilder builder, Location location, Type type,
+                       Attribute initializer);
+
+Value allocateVariable(OpBuilder builder, Location location, Type type,
                        std::optional<StringRef> initializer = std::nullopt);
 
 Value addressOf(OpBuilder builder, Location location, Value operand);
@@ -122,8 +125,8 @@ Value ireeVmInstanceLookupType(OpBuilder builder, Location location,
 
 void ireeVmRefRelease(OpBuilder builder, Location location, Value operand);
 
-}  // namespace emitc_builders
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace emitc_builders
+} // namespace iree_compiler
+} // namespace mlir
 
-#endif  // IREE_COMPILER_DIALECT_VM_CONVERSION_VMTOEMITC_EMITCBUILDERS_H_
+#endif // IREE_COMPILER_DIALECT_VM_CONVERSION_VMTOEMITC_EMITCBUILDERS_H_

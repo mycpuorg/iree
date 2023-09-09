@@ -14,6 +14,7 @@
 #include "iree/base/api.h"
 #include "iree/base/internal/call_once.h"
 #include "iree/base/internal/cpu.h"
+#include "iree/base/internal/math.h"
 #include "iree/schemas/cpu_data.h"
 
 // Implementation of iree_uk_assert_fail failure is deferred to users code, i.e.
@@ -29,20 +30,20 @@ void iree_uk_assert_fail(const char* file, int line, const char* function,
   abort();
 }
 
-iree_uk_ssize_t iree_uk_2d_buffer_length(iree_uk_type_t type,
-                                         iree_uk_ssize_t size0,
-                                         iree_uk_ssize_t stride0) {
+iree_uk_index_t iree_uk_2d_buffer_length(iree_uk_type_t type,
+                                         iree_uk_index_t size0,
+                                         iree_uk_index_t stride0) {
   // Just for testing purposes, so it's OK to overestimate size.
   return size0 * stride0 << iree_uk_type_size_log2(type);
 }
 
 bool iree_uk_2d_buffers_equal(const void* buf1, const void* buf2,
-                              iree_uk_type_t type, iree_uk_ssize_t size0,
-                              iree_uk_ssize_t size1, iree_uk_ssize_t stride0) {
-  iree_uk_ssize_t elem_size = iree_uk_type_size(type);
+                              iree_uk_type_t type, iree_uk_index_t size0,
+                              iree_uk_index_t size1, iree_uk_index_t stride0) {
+  iree_uk_index_t elem_size = iree_uk_type_size(type);
   const char* buf1_ptr = buf1;
   const char* buf2_ptr = buf2;
-  for (iree_uk_ssize_t i0 = 0; i0 < size0; ++i0) {
+  for (iree_uk_index_t i0 = 0; i0 < size0; ++i0) {
     if (memcmp(buf1_ptr, buf2_ptr, elem_size * size1)) return false;
     buf1_ptr += elem_size * stride0;
     buf2_ptr += elem_size * stride0;
@@ -82,12 +83,12 @@ int iree_uk_random_engine_get_minus16_plus15(iree_uk_random_engine_t* e) {
   return (v % 32) - 16;
 }
 
-void iree_uk_write_random_buffer(void* buffer, iree_uk_ssize_t size_in_bytes,
+void iree_uk_write_random_buffer(void* buffer, iree_uk_index_t size_in_bytes,
                                  iree_uk_type_t type,
                                  iree_uk_random_engine_t* engine) {
-  iree_uk_ssize_t elem_size = iree_uk_type_size(type);
-  iree_uk_ssize_t size_in_elems = size_in_bytes / elem_size;
-  for (iree_uk_ssize_t i = 0; i < size_in_elems; ++i) {
+  iree_uk_index_t elem_size = iree_uk_type_size(type);
+  iree_uk_index_t size_in_elems = size_in_bytes / elem_size;
+  for (iree_uk_index_t i = 0; i < size_in_elems; ++i) {
     // Small integers, should work for now for all the types we currently have
     // and enable exact float arithmetic, allowing to keep tests simpler for
     // now. Watch out for when we'll do float16!
@@ -95,6 +96,12 @@ void iree_uk_write_random_buffer(void* buffer, iree_uk_ssize_t size_in_bytes,
     switch (type) {
       case IREE_UK_TYPE_FLOAT_32:
         ((float*)buffer)[i] = random_val;
+        break;
+      case IREE_UK_TYPE_FLOAT_16:
+        ((uint16_t*)buffer)[i] = iree_math_f32_to_f16((float)random_val);
+        break;
+      case IREE_UK_TYPE_BFLOAT_16:
+        ((uint16_t*)buffer)[i] = iree_math_f32_to_bf16((float)random_val);
         break;
       case IREE_UK_TYPE_INT_32:
         ((int32_t*)buffer)[i] = random_val;
@@ -185,14 +192,14 @@ void iree_uk_make_cpu_data_for_features(const char* cpu_features,
   }
 
   // Named feature sets.
-#if defined(IREE_UK_ARCH_X86_64)
+#if defined(IREE_ARCH_X86_64)
   iree_uk_uint64_t avx2_fma =
-      IREE_CPU_DATA0_X86_64_AVX2 | IREE_CPU_DATA0_X86_64_FMA;
+      IREE_CPU_DATA0_X86_64_AVX | IREE_CPU_DATA0_X86_64_AVX2 |
+      IREE_CPU_DATA0_X86_64_FMA | IREE_CPU_DATA0_X86_64_F16C;
   iree_uk_uint64_t avx512_base =
       avx2_fma | IREE_CPU_DATA0_X86_64_AVX512F |
       IREE_CPU_DATA0_X86_64_AVX512BW | IREE_CPU_DATA0_X86_64_AVX512DQ |
       IREE_CPU_DATA0_X86_64_AVX512VL | IREE_CPU_DATA0_X86_64_AVX512CD;
-  iree_uk_uint64_t avx512_vnni = avx512_base | IREE_CPU_DATA0_X86_64_AVX512VNNI;
   if (!strcmp(cpu_features, "avx2_fma")) {
     out_cpu_data_fields[0] = avx2_fma;
     return;
@@ -202,10 +209,10 @@ void iree_uk_make_cpu_data_for_features(const char* cpu_features,
     return;
   }
   if (!strcmp(cpu_features, "avx512_vnni")) {
-    out_cpu_data_fields[0] = avx512_vnni;
+    out_cpu_data_fields[0] = avx512_base | IREE_CPU_DATA0_X86_64_AVX512VNNI;
     return;
   }
-#endif  // defined(IREE_UK_ARCH_X86_64)
+#endif  // defined(IREE_ARCH_X86_64)
 
   // Fall back to interpreting cpu_features as a comma-separated list of LLVM
   // feature names.

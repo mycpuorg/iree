@@ -10,7 +10,7 @@
 include "mlir/Pass/PassBase.td"
 
 def StableHLOToStableHLOPreprocessing :
-    Pass<"iree-stablehlo-to-stablehlo-preprocessing", "func::FuncOp"> {
+    Pass<"iree-stablehlo-to-stablehlo-preprocessing", "ModuleOp"> {
   let summary = "Applies IREE-specific stablehlo to stablehlo preprocessing transformations";
   let options = [
     Option<"orderConvFeatures", "order-conv-features", "bool", /*default=*/"true",
@@ -31,6 +31,16 @@ def DotGeneralToDot :
 def EinsumToDotGeneral :
     Pass<"iree-stablehlo-preprocessing-einsum-to-dot-general", "func::FuncOp"> {
   let summary = "Legalizes einsum ops to general dot ops";
+}
+
+def FlattenTuplesInCFG :
+    Pass<"iree-stablehlo-preprocessing-flatten-cfg-tuples", "ModuleOp"> {
+  let summary = "Flattens tuples in the CFG form of StableHLO";
+}
+
+def FlattenTuplesInSCF :
+    Pass<"iree-stablehlo-preprocessing-flatten-scf-tuples", "ModuleOp"> {
+  let summary = "Flattens tuples in the SCF form of StableHLO";
 }
 
 def GatherToTorchIndexSelect :

@@ -10,10 +10,12 @@
 #include "iree/builtins/ukernel/pack.h"
 
 typedef enum iree_uk_pack_type_t {
-  iree_uk_pack_type_none = 0,
   iree_uk_pack_type_f32f32 = IREE_UK_TIE_2_TYPES_LITERAL(FLOAT_32, FLOAT_32),
   iree_uk_pack_type_i8i8 = IREE_UK_TIE_2_TYPES_LITERAL(INT_8, INT_8),
   iree_uk_pack_type_i32i32 = IREE_UK_TIE_2_TYPES_LITERAL(INT_32, INT_32),
+  iree_uk_pack_type_f16f16 = IREE_UK_TIE_2_TYPES_LITERAL(FLOAT_16, FLOAT_16),
+  iree_uk_pack_type_bf16bf16 =
+      IREE_UK_TIE_2_TYPES_LITERAL(BFLOAT_16, BFLOAT_16),
 } iree_uk_pack_type_t;
 
 static inline iree_uk_pack_type_t iree_uk_pack_type(iree_uk_uint32_t flags) {
@@ -24,8 +26,12 @@ static inline iree_uk_pack_type_t iree_uk_pack_type(iree_uk_uint32_t flags) {
       return iree_uk_pack_type_i8i8;
     case IREE_UK_FLAG_PACK_TYPE_I32I32:
       return iree_uk_pack_type_i32i32;
+    case IREE_UK_FLAG_PACK_TYPE_F16F16:
+      return iree_uk_pack_type_f16f16;
+    case IREE_UK_FLAG_PACK_TYPE_BF16BF16:
+      return iree_uk_pack_type_bf16bf16;
     default:
-      return iree_uk_pack_type_none;
+      IREE_UK_ASSUME_UNREACHABLE;
   }
 }
 
@@ -39,21 +45,25 @@ static inline iree_uk_type_t iree_uk_pack_out_type(iree_uk_pack_type_t type) {
 
 typedef void (*iree_uk_pack_tile_func_t)(
     void* IREE_UK_RESTRICT out_tile_ptr,
-    const void* IREE_UK_RESTRICT in_tile_ptr, iree_uk_ssize_t outer_size1,
-    iree_uk_ssize_t out_stride1, iree_uk_ssize_t in_stride0,
-    iree_uk_ssize_t elem_size, iree_uk_ssize_t tile_size0,
-    iree_uk_ssize_t tile_size1);
+    const void* IREE_UK_RESTRICT in_tile_ptr, iree_uk_index_t outer_size1,
+    iree_uk_index_t out_stride1, iree_uk_index_t in_stride0,
+    iree_uk_index_t elem_size, iree_uk_index_t tile_size0,
+    iree_uk_index_t tile_size1);
 
 // Tile kernel declarations. Prototype matches iree_uk_unpack_tile_func_t.
 #define IREE_UK_PACK_TILE_FUNC_DECL(NAME)                             \
   void NAME(void* IREE_UK_RESTRICT out_tile_ptr,                      \
             const void* IREE_UK_RESTRICT in_tile_ptr,                 \
-            iree_uk_ssize_t outer_size1, iree_uk_ssize_t out_stride1, \
-            iree_uk_ssize_t in_stride0, iree_uk_ssize_t elem_size,    \
-            iree_uk_ssize_t tile_size0, iree_uk_ssize_t tile_size1);
+            iree_uk_index_t outer_size1, iree_uk_index_t out_stride1, \
+            iree_uk_index_t in_stride0, iree_uk_index_t elem_size,    \
+            iree_uk_index_t tile_size0, iree_uk_index_t tile_size1);
 
 // Returns the tile function to use for the pack op with the given params.
 iree_uk_pack_tile_func_t iree_uk_pack_select_tile_func(
+    const iree_uk_pack_params_t* params);
+
+// Architecture-specific implementation.
+iree_uk_pack_tile_func_t iree_uk_pack_select_tile_func_arch(
     const iree_uk_pack_params_t* params);
 
 #endif  // IREE_BUILTINS_UKERNEL_PACK_INTERNAL_H_

@@ -60,7 +60,8 @@ struct GatherIsTorchIndexSelectPattern final
       return rewriter.notifyMatchFailure(gather, "start_index_map != [0]");
     }
 
-    auto resultTy = gather.getResult().getType().dyn_cast<RankedTensorType>();
+    auto resultTy =
+        llvm::dyn_cast<RankedTensorType>(gather.getResult().getType());
     if (!resultTy) {
       return rewriter.notifyMatchFailure(gather, "unranked result");
     }
@@ -96,7 +97,7 @@ struct GatherIsTorchIndexSelectPattern final
       }
     }
 
-    auto indexSelectShape = llvm::to_vector<4>(startIndicesTy.getShape());
+    auto indexSelectShape = llvm::to_vector(startIndicesTy.getShape());
 
     for (auto dim : operandTy.getShape().drop_front()) {
       indexSelectShape.push_back(dim);
@@ -134,11 +135,11 @@ struct GatherToTorchIndexSelect final
   }
 };
 
-}  // namespace
+} // namespace
 
 void populatePreprocessingGatherToTorchIndexSelectPatterns(
     mlir::MLIRContext *context, RewritePatternSet *patterns) {
   patterns->add<GatherIsTorchIndexSelectPattern>(context);
 }
 
-}  // namespace mlir::iree_compiler::stablehlo
+} // namespace mlir::iree_compiler::stablehlo

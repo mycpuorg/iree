@@ -23,12 +23,13 @@ iree_cc_library(
     MLIRAffineDialect
     MLIRArithDialect
     MLIRFuncDialect
-    MLIRGPUOps
+    MLIRGPUDialect
     MLIRIR
     MLIRMathDialect
     MLIRMemRefDialect
     MLIRNVGPUDialect
     MLIRVectorDialect
+    iree::compiler::Codegen::Transforms
     iree::compiler::Codegen::Utils
   PUBLIC
 )

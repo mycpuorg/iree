@@ -15,6 +15,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+#include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/TransformOps/DialectExtension.h"
@@ -29,7 +30,9 @@
 #include "mlir/Dialect/SCF/TransformOps/SCFTransformOps.h"
 #include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/TransformOps/TensorTransformOps.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
+#include "mlir/Dialect/Transform/PDLExtension/PDLExtension.h"
 #include "mlir/Dialect/Vector/TransformOps/VectorTransformOps.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/Dialect.h"
@@ -90,6 +93,7 @@ int main(int argc, char **argv) {
   mlir::test_ext::registerTestListenerPasses();
 
   // External models.
+  mlir::func::registerInlinerExtension(registry);
   mlir::linalg::registerTilingInterfaceExternalModels(registry);
 
   registry.addExtensions<IREE::LinalgExt::LinalgExtTransformOpsExtension,
@@ -97,7 +101,13 @@ int main(int argc, char **argv) {
   mlir::bufferization::registerTransformDialectExtension(registry);
   mlir::linalg::registerTransformDialectExtension(registry);
   mlir::scf::registerTransformDialectExtension(registry);
+  mlir::tensor::registerFindPayloadReplacementOpInterfaceExternalModels(
+      registry);
+  mlir::tensor::registerTransformDialectExtension(registry);
   mlir::vector::registerTransformDialectExtension(registry);
+
+  // Dialect extensions.
+  transform::registerPDLExtension(registry);
 
   return mlir::asMainReturnCode(mlir::MlirOptMain(
       argc, argv, "MLIR modular optimizer driver\n", registry));

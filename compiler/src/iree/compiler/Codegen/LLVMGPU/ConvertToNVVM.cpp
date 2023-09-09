@@ -4,10 +4,10 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "iree/compiler/Codegen/Common/GPU/GPUPatterns.h"
 #include "iree/compiler/Codegen/LLVMGPU/ConvertToLLVM.h"
-#include "iree/compiler/Codegen/PassDetail.h"
-#include "iree/compiler/Codegen/Passes.h"
-#include "iree/compiler/Codegen/Utils/GPUUtils.h"
+#include "iree/compiler/Codegen/LLVMGPU/PassDetail.h"
+#include "iree/compiler/Codegen/LLVMGPU/Passes.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -21,6 +21,7 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/NVGPUToNVVM/NVGPUToNVVM.h"
+#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
@@ -37,22 +38,6 @@ namespace iree_compiler {
 
 namespace {
 
-// A `dealloc` is converted into a call to `free` on the underlying data buffer.
-// The memref descriptor being an SSA value, there is no need to clean it up
-// in any way.
-struct DropSharedMemoryDeallocOp : public OpRewritePattern<memref::DeallocOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(memref::DeallocOp op,
-                                PatternRewriter &rewriter) const override {
-    if (!hasSharedMemoryAddressSpace(
-            op.getMemref().getType().cast<MemRefType>()))
-      return failure();
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
 /// A pass that replaces all occurrences of GPU device operations with their
 /// corresponding NVVM equivalent.
 ///
@@ -60,7 +45,7 @@ struct DropSharedMemoryDeallocOp : public OpRewritePattern<memref::DeallocOp> {
 /// code.
 struct ConvertToNVVMPass : public ConvertToNVVMBase<ConvertToNVVMPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect, NVVM::NVVMDialect>();
+    registry.insert<gpu::GPUDialect, LLVM::LLVMDialect, NVVM::NVVMDialect>();
   }
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -72,14 +57,14 @@ struct ConvertToNVVMPass : public ConvertToNVVMBase<ConvertToNVVMPass> {
     populateGpuMemorySpaceAttributeConversions(
         converter, [](gpu::AddressSpace space) -> unsigned {
           switch (space) {
-            case gpu::AddressSpace::Global:
-              return static_cast<unsigned>(
-                  NVVM::NVVMMemorySpace::kGlobalMemorySpace);
-            case gpu::AddressSpace::Workgroup:
-              return static_cast<unsigned>(
-                  NVVM::NVVMMemorySpace::kSharedMemorySpace);
-            case gpu::AddressSpace::Private:
-              return 0;
+          case gpu::AddressSpace::Global:
+            return static_cast<unsigned>(
+                NVVM::NVVMMemorySpace::kGlobalMemorySpace);
+          case gpu::AddressSpace::Workgroup:
+            return static_cast<unsigned>(
+                NVVM::NVVMMemorySpace::kSharedMemorySpace);
+          case gpu::AddressSpace::Private:
+            return 0;
           }
           llvm_unreachable("unknown address space enum value");
           return 0;
@@ -98,7 +83,7 @@ struct ConvertToNVVMPass : public ConvertToNVVMBase<ConvertToNVVMPass> {
     // Run Vector -> Vector transformations ahead of conversion to LLVM.
     {
       RewritePatternSet patterns(&getContext());
-      patterns.insert<DropSharedMemoryDeallocOp>(&getContext());
+      populateDropSharedMemoryDeallocOpPatterns(patterns);
       populateScalarizeMathOps(patterns);
       populateConvertSharedMemoryAllocOps(patterns);
       vector::populateVectorToVectorCanonicalizationPatterns(patterns);
@@ -141,25 +126,28 @@ struct ConvertToNVVMPass : public ConvertToNVVMBase<ConvertToNVVMPass> {
       populateNVGPUToNVVMConversionPatterns(converter, llvmPatterns);
       populateGpuWMMAToNVVMConversionPatterns(converter, llvmPatterns);
       LLVMConversionTarget target(getContext());
-      populateFuncToLLVMFuncOpConversionPattern(converter, llvmPatterns);
       configureGpuToNVVMConversionLegality(target);
-      target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp funcOp) {
-        if (isEntryPoint(funcOp)) return false;
-        return true;
-      });
       if (failed(applyPartialConversion(m, target, std::move(llvmPatterns)))) {
         signalPassFailure();
+      }
+    }
+    // Convert NVVM ops to Inline Assembly.
+    {
+      RewritePatternSet patterns(&getContext());
+      populateNVVMToLLVMConversionPatterns(patterns);
+      if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns)))) {
+        return signalPassFailure();
       }
     }
     ConvertToDynamicSharedMemory(m);
   }
 };
 
-}  // anonymous namespace
+} // anonymous namespace
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertToNVVMPass() {
   return std::make_unique<ConvertToNVVMPass>();
 }
 
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace iree_compiler
+} // namespace mlir

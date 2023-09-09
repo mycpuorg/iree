@@ -27,7 +27,7 @@ extern "C" {
 // Uses |device_allocator| to allocate the buffers.
 // The returned variant list must be freed by the caller.
 iree_status_t iree_tooling_parse_to_variant_list(
-    iree_hal_allocator_t* device_allocator,
+    iree_hal_device_t* device, iree_hal_allocator_t* device_allocator,
     const iree_string_view_t* input_strings,
     iree_host_size_t input_strings_count, iree_allocator_t host_allocator,
     iree_vm_list_t** out_list);
@@ -40,7 +40,7 @@ iree_status_t iree_tooling_parse_to_variant_list(
 // described in iree/hal/api.h
 // Uses |device_allocator| to allocate the buffers.
 iree_status_t iree_tooling_parse_into_variant_list(
-    iree_hal_allocator_t* device_allocator,
+    iree_hal_device_t* device, iree_hal_allocator_t* device_allocator,
     const iree_string_view_t* input_strings,
     iree_host_size_t input_strings_count, iree_allocator_t host_allocator,
     iree_vm_list_t* list);
@@ -62,7 +62,7 @@ iree_status_t iree_tooling_append_async_fence_inputs(
 // Prints buffers in the IREE standard shaped buffer format:
 //   [shape]xtype=[value]
 // described in
-// https://github.com/openxla/iree/tree/main/iree/hal/api.h
+// https://github.com/openxla/iree/tree/main/runtime/src/iree/hal/api.h
 iree_status_t iree_tooling_append_variant_list_lines(
     iree_string_view_t list_name, iree_vm_list_t* list,
     iree_host_size_t max_element_count, iree_string_builder_t* builder);

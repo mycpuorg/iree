@@ -9,7 +9,10 @@
 #include <memory>
 
 #include "iree-dialects/Dialect/LinalgExt/Passes/Passes.h"
-#include "iree/compiler/Codegen/Passes.h"
+#include "iree/compiler/Codegen/Common/CPU/Passes.h"
+#include "iree/compiler/Codegen/Common/Passes.h"
+#include "iree/compiler/Codegen/LLVMCPU/Passes.h"
+#include "iree/compiler/Codegen/VMVX/Passes.h"
 #include "iree/compiler/Dialect/HAL/Transforms/Passes.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
@@ -33,11 +36,10 @@ static void buildVectorVMVXTransformPassPipeline(OpPassManager &passManager) {
   // ---------------------------------------------------------------------------
   addCommonTargetExecutablePreprocessingPasses(passManager.nest<ModuleOp>());
   passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(
-      createVMVXMaterializeEncodingPass());
+      createCPUMaterializeEncodingPass());
   // TODO: Remove the following pass the plumb support for #hal.descriptor_type
   // memory space through the stack.
-  passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(
-      createEraseHALDescriptorTypeFromMemRefPass());
+  passManager.addPass(createEraseHALDescriptorTypeFromMemRefPass());
   passManager.addPass(createLLVMCPULowerExecutableTargetPass());
 
   OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
@@ -89,8 +91,8 @@ static void buildVectorVMVXTransformPassPipeline(OpPassManager &passManager) {
   nestedModulePM.addPass(createCanonicalizerPass());
 }
 
-static void buildLoopOptimizationVMVXTransformPassPipeline(
-    OpPassManager &passManager) {
+static void
+buildLoopOptimizationVMVXTransformPassPipeline(OpPassManager &passManager) {
   OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
 
   nestedModulePM.addNestedPass<func::FuncOp>(createLowerAffinePass());
@@ -130,7 +132,7 @@ void buildVMVXTransformPassPipeline(OpPassManager &passManager) {
 namespace {
 #define GEN_PASS_REGISTRATION
 #include "iree/compiler/Dialect/VMVX/Transforms/Passes.h.inc"
-}  // namespace
+} // namespace
 
 void registerVMVXPasses() {
   // Generated.
@@ -144,7 +146,7 @@ void registerVMVXPasses() {
       });
 }
 
-}  // namespace VMVX
-}  // namespace IREE
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace VMVX
+} // namespace IREE
+} // namespace iree_compiler
+} // namespace mlir

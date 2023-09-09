@@ -45,8 +45,9 @@ on:
 concurrency:
   # A PR number if a pull request and otherwise the commit hash. This cancels
   # queued and in-progress runs for the same PR (presubmit) or commit
-  # (postsubmit).
-  group: ${{ github.event.number || github.sha }}
+  # (postsubmit). The workflow name is prepended to avoid conflicts between
+  # different workflows.
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
   cancel-in-progress: true
 
 env:
@@ -65,7 +66,7 @@ jobs:
   ##############################################################################
   build_all:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_all')
     uses: ./.github/workflows/build_all.yml
     with:
       runner-group: ${{ needs.setup.outputs.runner-group }}
@@ -74,7 +75,7 @@ jobs:
 
   build_test_all_windows:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run) && ! fromJson(needs.setup.outputs.is-pr)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_test_all_windows')
     runs-on: windows-2022-64core
     defaults:
       run:
@@ -100,7 +101,7 @@ jobs:
           git submodule update --init --jobs 8 --depth 1
       - id: "gcp-auth"
         name: "Authenticating to Google Cloud"
-        if: ${{ needs.setup.outputs.write-caches }} == 1
+        if: needs.setup.outputs.write-caches == 1
         uses: "google-github-actions/auth@v1"
         with:
           token_format: "access_token"
@@ -132,7 +133,7 @@ jobs:
 
   build_test_all_macos_arm64:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run) && ! fromJson(needs.setup.outputs.is-pr)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_test_all_macos_arm64')
     runs-on:
       - ${{ github.repository == 'openxla/iree' && 'self-hosted' || 'macos-11' }} # must come first
       - runner-group=postsubmit
@@ -159,14 +160,18 @@ jobs:
           # Persist the cache by storing in the parent directory.
           CCACHE_DIR: ${{ github.workspace }}/../.ccache
           CCACHE_MAXSIZE: 30G
-        run: bash ./build_tools/cmake/build_all.sh "${BUILD_DIR}"
+        run: |
+          source .venv/bin/activate
+          bash ./build_tools/cmake/build_all.sh "${BUILD_DIR}"
       - name: "Testing IREE"
-        run: bash ./build_tools/cmake/ctest_all.sh "${BUILD_DIR}"
+        run: |
+          source .venv/bin/activate
+          IREE_METAL_DISABLE=0 bash ./build_tools/cmake/ctest_all.sh "${BUILD_DIR}"
 
   build_test_all_macos_x86_64:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run) && ! fromJson(needs.setup.outputs.is-pr)
-    runs-on: macos-12-xl
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_test_all_macos_x86_64')
+    runs-on: macos-13-xl
     env:
       BUILD_DIR: build-macos
     defaults:
@@ -177,7 +182,7 @@ jobs:
         uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
       - id: "gcp-auth"
         name: "Authenticating to Google Cloud"
-        if: ${{ needs.setup.outputs.write-caches }} == 1
+        if: needs.setup.outputs.write-caches == 1
         uses: "google-github-actions/auth@v1"
         with:
           token_format: "access_token"
@@ -185,6 +190,13 @@ jobs:
           create_credentials_file: false
       - name: "Updating git submodules"
         run: git submodule update --init --jobs 8 --depth 1
+      # There are multiple versions of Xcode and SDKs installed on the macOS runner.
+      # Select the latest Xcode app to enable using Metal offline toolchain.
+      - name: "Update Xcode command line tools path"
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          xcrun metal --version
+          xcrun metallib --version
       - name: "Setting up Python"
         uses: actions/setup-python@d27e3f3d7c64b4bbf8e4abfb9b63b83e846e0435 # v4.5.0
         with:
@@ -209,7 +221,7 @@ jobs:
 
   build_test_all_bazel:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_test_all_bazel')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -227,12 +239,12 @@ jobs:
         run: |
           ./build_tools/github_actions/docker_run.sh \
             --env "IREE_WRITE_REMOTE_BAZEL_CACHE=${IREE_WRITE_REMOTE_BAZEL_CACHE}" \
-            gcr.io/iree-oss/swiftshader-bleeding-edge@sha256:b3cce73eb9f41d67981bc8f00e98fd66fe3487caec1bcbf38d4039dcc61e499d \
+            gcr.io/iree-oss/swiftshader-bleeding-edge@sha256:d2483ac643184a16942489d8f709ef3714543ae795fa9ae8fd2e4d8bf68a24a0 \
             ./build_tools/bazel/build_core.sh
 
   test_all:
     needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'test_all')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -256,23 +268,23 @@ jobs:
         run: |
           ./build_tools/github_actions/docker_run.sh \
             --env IREE_CUDA_DISABLE=1 \
-            gcr.io/iree-oss/swiftshader@sha256:47501aca2c3cee08358d8f8df78f7d7a36101fb9559cfe439285756620087efa \
+            gcr.io/iree-oss/swiftshader@sha256:035ac89d3c357787052a836f4cbd227035260c05c95fa9a53d809600c454e819 \
             ./build_tools/cmake/ctest_all.sh \
             "${BUILD_DIR}"
 
   test_gpu:
     needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'test_gpu')
+    env:
+      BUILD_DIR: ${{ needs.build_all.outputs.build-dir }}
+      BUILD_DIR_ARCHIVE: ${{ needs.build_all.outputs.build-dir-archive }}
+      BUILD_DIR_GCS_ARTIFACT: ${{ needs.build_all.outputs.build-dir-gcs-artifact }}
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
       - environment=${{ needs.setup.outputs.runner-env }}
       - gpu
       - os-family=Linux
-    env:
-      BUILD_DIR: ${{ needs.build_all.outputs.build-dir }}
-      BUILD_DIR_ARCHIVE: ${{ needs.build_all.outputs.build-dir-archive }}
-      BUILD_DIR_GCS_ARTIFACT: ${{ needs.build_all.outputs.build-dir-gcs-artifact }}
     steps:
       - name: "Checking out repository"
         uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
@@ -286,27 +298,82 @@ jobs:
         run: gcloud storage cp "${BUILD_DIR_GCS_ARTIFACT}" "${BUILD_DIR_ARCHIVE}"
       - name: "Extracting build dir archive"
         run: tar -xf "${BUILD_DIR_ARCHIVE}"
-      - name: "Testing with GPU"
+      - name: "Testing all"
+        env:
+          IREE_NVIDIA_SM80_TESTS_DISABLE: 1
+          IREE_MULTI_DEVICE_TESTS_DISABLE: 1
+          IREE_CTEST_LABEL_REGEX: ^requires-gpu|^driver=vulkan$|^driver=cuda$
         run: |
           ./build_tools/github_actions/docker_run.sh \
-            --env IREE_VULKAN_F16_DISABLE=0 \
-            --env IREE_CUDA_DISABLE=0 \
-            --env IREE_NVIDIA_GPU_TESTS_DISABLE=0 \
-            --env CTEST_PARALLEL_LEVEL=2 \
-            --gpus all \
-            --env NVIDIA_DRIVER_CAPABILITIES=all \
-            gcr.io/iree-oss/nvidia@sha256:e7a1daba40815d1e94c901ce7de4bead54e725302ba320eda6745857977528a7 \
-            bash -euo pipefail -c \
-              "./build_tools/scripts/check_cuda.sh
-              ./build_tools/scripts/check_vulkan.sh
-              ./build_tools/cmake/ctest_all.sh ${BUILD_DIR}"
+              --env IREE_NVIDIA_SM80_TESTS_DISABLE \
+              --env IREE_MULTI_DEVICE_TESTS_DISABLE \
+              --env IREE_CTEST_LABEL_REGEX \
+              --env IREE_VULKAN_F16_DISABLE=0 \
+              --env IREE_CUDA_DISABLE=0 \
+              --env IREE_NVIDIA_GPU_TESTS_DISABLE=0 \
+              --env CTEST_PARALLEL_LEVEL=2 \
+              --env NVIDIA_DRIVER_CAPABILITIES=all \
+              --gpus all \
+              gcr.io/iree-oss/nvidia@sha256:4e814f5f3bac53c88b64f0fe89af9f3dcc43bcf8610ea8b4511e21015ad1fb9c \
+              bash -euo pipefail -c \
+                "./build_tools/scripts/check_cuda.sh
+                ./build_tools/scripts/check_vulkan.sh
+                ./build_tools/cmake/ctest_all.sh ${BUILD_DIR}"
+
+  test_a100:
+    needs: [setup, build_all]
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'test_a100')
+    env:
+      BUILD_DIR: ${{ needs.build_all.outputs.build-dir }}
+      BUILD_DIR_ARCHIVE: ${{ needs.build_all.outputs.build-dir-archive }}
+      BUILD_DIR_GCS_ARTIFACT: ${{ needs.build_all.outputs.build-dir-gcs-artifact }}
+    runs-on:
+      - self-hosted # must come first
+      - runner-group=${{ needs.setup.outputs.runner-group }}
+      - environment=${{ needs.setup.outputs.runner-env }}
+      - a100
+      - os-family=Linux
+    steps:
+      - name: "Checking out repository"
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
+        with:
+          submodules: true
+      - name: Querying GPU information
+        run: |
+          ./build_tools/scripts/check_cuda.sh
+          ./build_tools/scripts/check_vulkan.sh
+      - name: "Downloading build dir archive"
+        run: gcloud storage cp "${BUILD_DIR_GCS_ARTIFACT}" "${BUILD_DIR_ARCHIVE}"
+      - name: "Extracting build dir archive"
+        run: tar -xf "${BUILD_DIR_ARCHIVE}"
+      - name: "Testing all"
+        env:
+          IREE_NVIDIA_SM80_TESTS_DISABLE: 0
+          IREE_MULTI_DEVICE_TESTS_DISABLE: 1
+          IREE_CTEST_LABEL_REGEX: ^requires-gpu-sm80|^requires-gpu|^driver=vulkan$|^driver=cuda$
+        run: |
+          ./build_tools/github_actions/docker_run.sh \
+              --env IREE_NVIDIA_SM80_TESTS_DISABLE \
+              --env IREE_MULTI_DEVICE_TESTS_DISABLE \
+              --env IREE_CTEST_LABEL_REGEX \
+              --env IREE_VULKAN_F16_DISABLE=0 \
+              --env IREE_CUDA_DISABLE=0 \
+              --env IREE_NVIDIA_GPU_TESTS_DISABLE=0 \
+              --env CTEST_PARALLEL_LEVEL=4 \
+              --env NVIDIA_DRIVER_CAPABILITIES=all \
+              --gpus all \
+              gcr.io/iree-oss/nvidia@sha256:4e814f5f3bac53c88b64f0fe89af9f3dcc43bcf8610ea8b4511e21015ad1fb9c \
+              bash -euo pipefail -c \
+                "./build_tools/scripts/check_cuda.sh
+                ./build_tools/scripts/check_vulkan.sh
+                ./build_tools/cmake/ctest_all.sh ${BUILD_DIR}"
 
   ################################## Subsets ###################################
   # Jobs that build some subset of IREE
   ##############################################################################
   build_test_runtime:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_test_runtime')
     runs-on: ubuntu-20.04-64core
     env:
       BUILD_DIR: build-runtime
@@ -321,20 +388,51 @@ jobs:
         run: |
           ./build_tools/github_actions/docker_run.sh \
             --env "BUILD_PRESET=test" \
-            gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
             ./build_tools/cmake/build_runtime.sh \
             "${BUILD_DIR}"
       - name: "Testing runtime"
         run: |
           ./build_tools/github_actions/docker_run.sh \
             --env IREE_VULKAN_DISABLE=1 \
-            gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
+            ./build_tools/cmake/ctest_all.sh \
+            "${BUILD_DIR}"
+
+  build_test_runtime_arm64:
+    needs: setup
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_test_runtime_arm64')
+    runs-on:
+      - self-hosted # must come first
+      - runner-group=${{ needs.setup.outputs.runner-group }}
+      - environment=${{ needs.setup.outputs.runner-env }}
+      - arm64
+      - os-family=Linux
+    env:
+      BUILD_DIR: build-runtime-arm64
+    steps:
+      - name: "Checking out repository"
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
+      - name: "Checking out runtime submodules"
+        run: ./build_tools/scripts/git/update_runtime_submodules.sh
+      - name: "Building runtime"
+        run: |
+          ./build_tools/github_actions/docker_run.sh \
+            --env "BUILD_PRESET=test" \
+            gcr.io/iree-oss/base-arm64@sha256:31cdb58f556e415c3c65afae31ae9c54e43c1eb3dcd845f3d107abd9b368ff3d \
+            ./build_tools/cmake/build_runtime.sh \
+            "${BUILD_DIR}"
+      - name: "Testing runtime"
+        run: |
+          ./build_tools/github_actions/docker_run.sh \
+            --env IREE_VULKAN_DISABLE=1 \
+            gcr.io/iree-oss/base-arm64@sha256:31cdb58f556e415c3c65afae31ae9c54e43c1eb3dcd845f3d107abd9b368ff3d \
             ./build_tools/cmake/ctest_all.sh \
             "${BUILD_DIR}"
 
   build_test_runtime_windows:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_test_runtime_windows')
     runs-on: windows-2022-64core
     defaults:
       run:
@@ -363,7 +461,7 @@ jobs:
   ##############################################################################
   test_tf_integrations:
     needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'test_tf_integrations')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -386,13 +484,14 @@ jobs:
       - name: "Running TF integrations tests"
         run: |
           ./build_tools/github_actions/docker_run.sh \
-            gcr.io/iree-oss/frontends-swiftshader@sha256:da14cc93637d3bfad469a670d4d7a49982df5d107b775331965e3bacb981d4cf \
+            --env IREE_VMVX_DISABLE=0 \
+            gcr.io/iree-oss/frontends-swiftshader@sha256:4b74c16cb3cda0b748bb3562a489da10cd637ca07a56a81bff0d75690f6c3d5b \
             build_tools/cmake/run_tf_tests.sh \
             "${BUILD_DIR}"
 
   test_tf_integrations_gpu:
     needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'test_tf_integrations_gpu')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -419,54 +518,18 @@ jobs:
             --env IREE_NVIDIA_GPU_TESTS_DISABLE=0 \
             --gpus all \
             --env NVIDIA_DRIVER_CAPABILITIES=all \
-            gcr.io/iree-oss/frontends-nvidia@sha256:00d8c8882643030a93f25e8c20e4349331a8f735ba02a1b0cfc93312fd403bc8 \
+            gcr.io/iree-oss/frontends-nvidia@sha256:0451c9e93c2d938c08b767e2deb1870fdf98060a1b01685cbacbf3f50e677fc5 \
             bash -euo pipefail -c \
               "./build_tools/scripts/check_cuda.sh
               ./build_tools/scripts/check_vulkan.sh
               build_tools/cmake/run_tf_tests.sh ${BUILD_DIR}"
-
-  ######################## Community Model Coverage ############################
-  # Jobs that test IREE behavior on a set of models.
-  ##############################################################################
-  # TODO(#11263): Drop this job once the IREE_BUILD_LEGACY_BENCHMARKS is removed.
-  test_build_benchmark_suites:
-    needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
-    runs-on:
-      - self-hosted # must come first
-      - runner-group=${{ needs.setup.outputs.runner-group }}
-      - environment=${{ needs.setup.outputs.runner-env }}
-      - cpu
-      - os-family=Linux
-    env:
-      BUILD_DIR: ${{ needs.build_all.outputs.build-dir }}
-      BUILD_DIR_ARCHIVE: ${{ needs.build_all.outputs.build-dir-archive }}
-      BUILD_DIR_GCS_ARTIFACT: ${{ needs.build_all.outputs.build-dir-gcs-artifact }}
-      BUILD_BENCHMARKS_DIR: build-benchmarks
-    steps:
-      - name: "Checking out repository"
-        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
-      - name: "Checking out runtime submodules"
-        run: ./build_tools/scripts/git/update_runtime_submodules.sh
-      - name: "Downloading build dir archive"
-        run: gcloud storage cp "${BUILD_DIR_GCS_ARTIFACT}" "${BUILD_DIR_ARCHIVE}"
-      - name: "Extracting install from build dir archive"
-        run: tar -xf "${BUILD_DIR_ARCHIVE}" "${BUILD_DIR}/install"
-      - name: "Building benchmarks"
-        id: build
-        run: |
-          build_tools/github_actions/docker_run.sh \
-            --env "IREE_HOST_BIN_DIR=${BUILD_DIR}/install/bin" \
-            --env "IREE_BUILD_BENCHMARKS_DIR=${BUILD_BENCHMARKS_DIR}" \
-            gcr.io/iree-oss/frontends@sha256:c123d9e54e5179ef49345271e5535bcd618ce8d5f20c1353741b81715c3bee33 \
-            build_tools/cmake/build_benchmarks.sh
 
   ############################### Configurations ###############################
   # Jobs that build IREE in some non-default configuration
   ##############################################################################
   python_release_packages:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'python_release_packages')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -474,18 +537,24 @@ jobs:
       - cpu
       - os-family=Linux
     steps:
+      - name: Prefetch Docker
+        run: |
+          docker pull ghcr.io/nod-ai/manylinux_x86_64:main &
       - name: "Checking out repository"
         uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
         with:
           submodules: true
+      - name: Wait for docker pull
+        run: |
+          wait
       - name: Build runtime wheels (Linux)
         shell: bash
         env:
-          packages: "iree-runtime iree-runtime-instrumented"
+          packages: "iree-runtime"
           output_dir: "${{ github.workspace }}/bindist"
           # Note when upgrading: Build just one Python version synced to our
           # minimum.
-          override_python_versions: cp38-cp38
+          override_python_versions: cp39-cp39
         run: |
           ./build_tools/python_deploy/build_linux_packages.sh
       # Note that it is just a trade-off decision to have this serialized
@@ -499,13 +568,13 @@ jobs:
           output_dir: "${{ github.workspace }}/bindist"
           # Note when upgrading: Build just one Python version synced to our
           # minimum.
-          override_python_versions: cp38-cp38
+          override_python_versions: cp39-cp39
         run: |
           ./build_tools/python_deploy/build_linux_packages.sh
 
   asan:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'asan')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -528,12 +597,12 @@ jobs:
             --env "IREE_CCACHE_GCP_TOKEN=$(gcloud auth application-default print-access-token)" \
             --env "IREE_WRITE_REMOTE_CCACHE=${IREE_WRITE_REMOTE_CCACHE}" \
             --env "CCACHE_NAMESPACE=swiftshader-bleeding-edge@sha256:c22afc61198e14a98e06e5261149de74c629acd2bc61b82e57ec90e5461b69be" \
-            gcr.io/iree-oss/swiftshader-bleeding-edge@sha256:b3cce73eb9f41d67981bc8f00e98fd66fe3487caec1bcbf38d4039dcc61e499d \
+            gcr.io/iree-oss/swiftshader-bleeding-edge@sha256:d2483ac643184a16942489d8f709ef3714543ae795fa9ae8fd2e4d8bf68a24a0 \
             ./build_tools/cmake/build_and_test_asan.sh
 
   tsan:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'tsan')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -552,13 +621,13 @@ jobs:
           ./build_tools/github_actions/docker_run.sh \
             --env "IREE_CCACHE_GCP_TOKEN=$(gcloud auth application-default print-access-token)" \
             --env "IREE_WRITE_REMOTE_CCACHE=${IREE_WRITE_REMOTE_CCACHE}" \
-            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb" \
-            gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb \
+            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33" \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
             ./build_tools/cmake/build_and_test_tsan.sh
 
   small_runtime:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'small_runtime')
     runs-on: ubuntu-20.04-64core
     env:
       BUILD_DIR: build-runtime
@@ -572,20 +641,20 @@ jobs:
         # and GitHub runners don't have write access to GCS
         run: |
           ./build_tools/github_actions/docker_run.sh \
-            gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
             ./build_tools/cmake/build_runtime_small.sh \
             "${BUILD_DIR}"
       - name: "Testing runtime"
         run: |
           ./build_tools/github_actions/docker_run.sh \
             --env IREE_VULKAN_DISABLE=1 \
-            gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
             ./build_tools/cmake/ctest_all.sh \
             "${BUILD_DIR}"
 
   gcc:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'gcc')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -610,14 +679,14 @@ jobs:
             --env "IREE_TARGET_BACKEND_WEBGPU=OFF" \
             --env "IREE_CCACHE_GCP_TOKEN=$(gcloud auth application-default print-access-token)" \
             --env "IREE_WRITE_REMOTE_CCACHE=${IREE_WRITE_REMOTE_CCACHE}" \
-            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb" \
-            gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb \
+            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33" \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
             ./build_tools/cmake/build_all.sh \
             "${BUILD_DIR}"
 
   tracing:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'tracing')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -639,14 +708,14 @@ jobs:
           ./build_tools/github_actions/docker_run.sh \
             --env "IREE_CCACHE_GCP_TOKEN=$(gcloud auth application-default print-access-token)" \
             --env "IREE_WRITE_REMOTE_CCACHE=${IREE_WRITE_REMOTE_CCACHE}" \
-            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb" \
-            gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb \
+            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33" \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
             ./build_tools/cmake/build_tracing.sh \
             "${BUILD_DIR}"
 
   debug:
     needs: setup
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'debug')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -668,10 +737,35 @@ jobs:
             --env "IREE_CCACHE_GCP_TOKEN=$(gcloud auth application-default print-access-token)" \
             --env "IREE_WRITE_REMOTE_CCACHE=${IREE_WRITE_REMOTE_CCACHE}" \
             --env "CMAKE_BUILD_TYPE=Debug" \
-            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb" \
-            gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb \
+            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33" \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
             ./build_tools/cmake/build_all.sh \
             "${BUILD_DIR}"
+
+  byo_llvm:
+    needs: setup
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'byo_llvm')
+    runs-on:
+      - self-hosted # must come first
+      - runner-group=${{ needs.setup.outputs.runner-group }}
+      - environment=${{ needs.setup.outputs.runner-env }}
+      - cpu
+      - os-family=Linux
+    steps:
+      - name: "Checking out repository"
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
+        with:
+          submodules: true
+      - name: "Building and testing with bring-your-own-LLVM"
+        env:
+          IREE_WRITE_REMOTE_CCACHE: ${{ needs.setup.outputs.write-caches }}
+        run: |
+          ./build_tools/github_actions/docker_run.sh \
+            --env "IREE_CCACHE_GCP_TOKEN=$(gcloud auth application-default print-access-token)" \
+            --env "IREE_WRITE_REMOTE_CCACHE=${IREE_WRITE_REMOTE_CCACHE}" \
+            --env "CCACHE_NAMESPACE=gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33" \
+            gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33 \
+            ./build_tools/cmake/build_and_test_byo_llvm.sh
 
   ############################### Configurations ###############################
   # Jobs that build and run IREE e2e tests/benchmarks                          #
@@ -679,7 +773,7 @@ jobs:
 
   build_benchmark_tools:
     needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_benchmark_tools')
     uses: ./.github/workflows/build_benchmark_tools.yml
     with:
       runner-group: ${{ needs.setup.outputs.runner-group }}
@@ -690,7 +784,7 @@ jobs:
 
   build_e2e_test_artifacts:
     needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_e2e_test_artifacts')
     uses: ./.github/workflows/build_e2e_test_artifacts.yml
     with:
       runner-group: ${{ needs.setup.outputs.runner-group }}
@@ -702,7 +796,7 @@ jobs:
 
   compilation_benchmarks:
     needs: [setup, build_e2e_test_artifacts]
-    if: fromJson(needs.setup.outputs.should-run) && needs.setup.outputs.benchmark-presets != ''
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'compilation_benchmarks') && needs.setup.outputs.benchmark-presets != ''
     uses: ./.github/workflows/benchmark_compilation.yml
     with:
       runner-group: ${{ needs.setup.outputs.runner-group }}
@@ -714,7 +808,7 @@ jobs:
 
   execution_benchmarks:
     needs: [setup, build_benchmark_tools, build_e2e_test_artifacts]
-    if: fromJson(needs.setup.outputs.should-run) && needs.setup.outputs.benchmark-presets != ''
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'execution_benchmarks') && needs.setup.outputs.benchmark-presets != ''
     uses: ./.github/workflows/benchmark_execution.yml
     with:
       # env.GCS_DIR is also duplicated in this workflow. See the note there on
@@ -727,7 +821,7 @@ jobs:
 
   process_benchmark_results:
     needs: [setup, compilation_benchmarks, execution_benchmarks]
-    if: fromJson(needs.setup.outputs.should-run) && needs.setup.outputs.benchmark-presets != ''
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'process_benchmark_results') && needs.setup.outputs.benchmark-presets != ''
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -804,17 +898,13 @@ jobs:
         env:
           EXECUTION_BENCHMARK_RESULTS_PATTERN: ${{ steps.download-execution-results.outputs.execution-benchmark-results-pattern }}
           IREE_DASHBOARD_API_TOKEN: ${{ secrets.IREE_DASHBOARD_API_TOKEN }}
-        # TODO(#9855): Specify CPU and GPU benchmark results to exclude mobile
-        # results until we migrate the dashboard. The tool ignores the file path
-        # if it doesn't exist.
         run: |
           build_tools/github_actions/docker_run.sh \
             --env "IREE_DASHBOARD_API_TOKEN=${IREE_DASHBOARD_API_TOKEN}" \
             gcr.io/iree-oss/benchmark-report@sha256:7498c6f32f63f13faf085463cc38656d4297519c824e63e1c99c8c258147f6ff \
             ./build_tools/benchmarks/upload_benchmarks_to_dashboard.py \
               --verbose \
-              --benchmark_files="${EXECUTION_BENCHMARK_RESULTS_DIR}/benchmark-results-c2-standard-16.json" \
-              --benchmark_files="${EXECUTION_BENCHMARK_RESULTS_DIR}/benchmark-results-a2-highgpu-1g.json" \
+              --benchmark_files="${EXECUTION_BENCHMARK_RESULTS_PATTERN}" \
               --compile_stats_files="${COMPILE_STATS_RESULTS}"
 
   ############################## Crosscompilation ##############################
@@ -823,7 +913,7 @@ jobs:
 
   cross_compile_and_test:
     needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'cross_compile_and_test')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -836,25 +926,25 @@ jobs:
           - platform: linux
             arch: riscv_64
             abi: lp64d
-            docker_image: "gcr.io/iree-oss/riscv@sha256:2e71c052d11b2526651af16e64816a30d164efcdfe6fb64623fb4737c37c466a"
+            docker_image: "gcr.io/iree-oss/riscv@sha256:e3b68a91018ada9d1cb3829a1de846e8d737e1575c528cea5a21a770bd02d2a7"
             build_script: "./build_tools/cmake/build_riscv.sh"
             test_script: "./build_tools/cmake/test_riscv.sh"
           - platform: linux
             arch: riscv_32
             abi: ilp32d
-            docker_image: "gcr.io/iree-oss/riscv@sha256:2e71c052d11b2526651af16e64816a30d164efcdfe6fb64623fb4737c37c466a"
+            docker_image: "gcr.io/iree-oss/riscv@sha256:e3b68a91018ada9d1cb3829a1de846e8d737e1575c528cea5a21a770bd02d2a7"
             build_script: "./build_tools/cmake/build_riscv.sh"
             test_script: "./build_tools/cmake/test_riscv.sh"
           - platform: generic
             arch: riscv_32
             abi: ilp32
-            docker_image: "gcr.io/iree-oss/riscv@sha256:2e71c052d11b2526651af16e64816a30d164efcdfe6fb64623fb4737c37c466a"
+            docker_image: "gcr.io/iree-oss/riscv@sha256:e3b68a91018ada9d1cb3829a1de846e8d737e1575c528cea5a21a770bd02d2a7"
             build_script: "./build_tools/cmake/build_riscv.sh"
             test_script: "./tests/riscv32/smoke.sh"
           - platform: emscripten
             arch: wasm32
             abi: wasm32
-            docker_image: "gcr.io/iree-oss/emscripten@sha256:1bb106b471a446e64a04ea313743174c5b51f1b49d5a41ccff3f70bbda9e7fd0"
+            docker_image: "gcr.io/iree-oss/emscripten@sha256:6e412f7ca51439ffce051a8a2e8fcbd7398743f461930a5f51c089441ffc3588"
             build_script: "./build_tools/cmake/build_runtime_emscripten.sh"
             # No test script
 
@@ -894,7 +984,7 @@ jobs:
             "${DOCKER_IMAGE}" \
             "${BUILD_SCRIPT}"
       - name: "Test cross-compiling target"
-        if: ${{ matrix.target.test_script }}
+        if: matrix.target.test_script
         run: |
           ./build_tools/github_actions/docker_run.sh \
             --env "IREE_TARGET_PLATFORM=${PLATFORM}" \
@@ -912,7 +1002,7 @@ jobs:
   # can't access matrix variable to skip certain matrix jobs for presubmit).
   build_and_test_android:
     needs: [setup, build_all]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'build_and_test_android')
     uses: ./.github/workflows/build_and_test_android.yml
     with:
       runner-group: ${{ needs.setup.outputs.runner-group }}
@@ -925,7 +1015,7 @@ jobs:
 
   test_benchmark_suites:
     needs: [setup, build_all, build_e2e_test_artifacts]
-    if: fromJson(needs.setup.outputs.should-run)
+    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'test_benchmark_suites')
     runs-on:
       - self-hosted # must come first
       - runner-group=${{ needs.setup.outputs.runner-group }}
@@ -937,15 +1027,15 @@ jobs:
         target:
           - platform: linux
             arch: riscv_64
-            docker_image: "gcr.io/iree-oss/riscv@sha256:2e71c052d11b2526651af16e64816a30d164efcdfe6fb64623fb4737c37c466a"
+            docker_image: "gcr.io/iree-oss/riscv@sha256:e3b68a91018ada9d1cb3829a1de846e8d737e1575c528cea5a21a770bd02d2a7"
             run_scripts: "./build_tools/cmake/build_riscv.sh && ./build_tools/cmake/test_riscv.sh"
           - platform: linux
             arch: riscv_32
-            docker_image: "gcr.io/iree-oss/riscv@sha256:2e71c052d11b2526651af16e64816a30d164efcdfe6fb64623fb4737c37c466a"
+            docker_image: "gcr.io/iree-oss/riscv@sha256:e3b68a91018ada9d1cb3829a1de846e8d737e1575c528cea5a21a770bd02d2a7"
             run_scripts: "./build_tools/cmake/build_riscv.sh && ./build_tools/cmake/test_riscv.sh"
           - platform: linux
             arch: x86_64
-            docker_image: "gcr.io/iree-oss/base@sha256:24fb5467da30c7b4c0f4c191cdf6124bda63b172d3ae98906e53b3d55ed6ddcb"
+            docker_image: "gcr.io/iree-oss/base@sha256:796fb81a11ff7e7d057c93de468b74e48b6a9641aa19b7f7673c2772e8ea3b33"
             run_scripts: "./build_tools/cmake/test_benchmark_suites_on_linux.sh"
     env:
       PLATFORM: ${{ matrix.target.platform }}
@@ -1006,12 +1096,17 @@ jobs:
 
       # Basic
       - build_all
+      - test_all
+      - build_test_all_bazel
+
+      # Platforms
       - build_test_all_windows
       - build_test_all_macos_arm64
       - build_test_all_macos_x86_64
-      - build_test_all_bazel
-      - test_all
+
+      # Accelerators
       - test_gpu
+      - test_a100
 
       # Subsets
       - build_test_runtime
@@ -1021,9 +1116,6 @@ jobs:
       - test_tf_integrations
       - test_tf_integrations_gpu
 
-      # Model Coverage
-      - test_build_benchmark_suites
-
       # Configurations
       - python_release_packages
       - asan
@@ -1032,6 +1124,7 @@ jobs:
       - gcc
       - tracing
       - debug
+      - byo_llvm
 
       # Crosscompilation
       - cross_compile_and_test
@@ -1049,6 +1142,8 @@ jobs:
       - execution_benchmarks
       - process_benchmark_results
     steps:
+      - name: "Checking out repository"
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
       - name: Getting failed jobs
         id: failed_jobs
         run: |
@@ -1062,57 +1157,21 @@ jobs:
             echo "The following jobs failed: ${FAILED_JOBS}"
             exit 1
           fi
+      - name: Show useful artifact links
+        if: always()
+        env:
+          # If the job of an artifact is skipped or failed, we show "NOT_PRESENT".
+          BUILD_DIR_GCS_ARTIFACT: ${{ needs.build_all.outputs.build-dir-gcs-artifact || 'NOT_PRESENT' }}
+          E2E_TEST_ARTIFACTS_GCS_ARTIFACT_DIR: ${{ needs.build_e2e_test_artifacts.outputs.e2e-test-artifacts-gcs-artifact-dir || 'NOT_PRESENT' }}
+          BENCHMARK_TOOLS_GCS_ARTIFACT_DIR: ${{ needs.build_benchmark_tools.outputs.benchmark-tools-gcs-artifact-dir || 'NOT_PRESENT' }}
+          EXECUTION_BENCHMARK_RESULTS_GCS_ARTIFACT_DIR: ${{ needs.execution_benchmarks.outputs.benchmark-results-gcs-artifact-dir || 'NOT_PRESENT' }}
+          COMPILATION_BENCHMARK_RESULTS_GCS_ARTIFACT: ${{ needs.compilation_benchmarks.outputs.compile-stats-results-gcs-artifact || 'NOT_PRESENT' }}
+        run: |
+          envsubst < ./.github/workflows/ARTIFACT_SUMMARY_TEMPLATE.md >> "${GITHUB_STEP_SUMMARY}"
       - name: Posting to Discord
         uses: sarisia/actions-status-discord@61114b793b460ee85fe38ad3fccc78c7ead38d55 # v1.11.1
         if: failure() && github.ref_name == 'main'
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK }}
           description: "The following jobs failed: ${{ steps.failed_jobs.outputs.failed-jobs }}"
-      - name: Show useful artifact links
-        if: always()
-        env:
-          BUILD_DIR_GCS_ARTIFACT: ${{ needs.build_all.outputs.build-dir-gcs-artifact }}
-          E2E_TEST_ARTIFACTS_GCS_ARTIFACT_DIR: ${{ needs.build_e2e_test_artifacts.outputs.e2e-test-artifacts-gcs-artifact-dir }}
-          BENCHMARK_TOOLS_GCS_ARTIFACT_DIR: ${{ needs.build_benchmark_tools.outputs.benchmark-tools-gcs-artifact-dir }}
-          EXECUTION_BENCHMARK_RESULTS_GCS_ARTIFACT_DIR: ${{ needs.execution_benchmarks.outputs.benchmark-results-gcs-artifact-dir }}
-          COMPILATION_BENCHMARK_RESULTS_GCS_ARTIFACT: ${{ needs.compilation_benchmarks.outputs.compile-stats-results-gcs-artifact }}
-        # If the job of an artifact is skipped or failed, we show "Not present".
-        run: |
-          cat <<EOF >> "${GITHUB_STEP_SUMMARY}"
-          ### :link: Artifact Links
-
-          \`\`\`sh
-          # Compiler and host tools archive:
-          export BUILD_DIR_URL="${BUILD_DIR_GCS_ARTIFACT:-Not present}"
-          # Directory of e2e test artifacts:
-          export E2E_TEST_ARTIFACTS_DIR_URL="${E2E_TEST_ARTIFACTS_GCS_ARTIFACT_DIR:-Not present}"
-          # Directory of benchmark tool binaries:
-          export BENCHMARK_TOOLS_DIR_URL="${BENCHMARK_TOOLS_GCS_ARTIFACT_DIR:-Not present}"
-          # Directory of execution benchmark results and traces:
-          export EXECUTION_BENCHMARK_RESULTS_DIR_URL="${EXECUTION_BENCHMARK_RESULTS_GCS_ARTIFACT_DIR:-Not present}"
-          # Compilation benchmark results:
-          export COMPILATION_BENCHMARK_RESULTS_URL="${COMPILATION_BENCHMARK_RESULTS_GCS_ARTIFACT:-Not present}"
-          \`\`\`
-
-          You can list \`gs://\` directories and download files with [gcloud cli](
-          https://cloud.google.com/sdk/gcloud/reference/storage).
-
-          <details>
-          <summary>Click to show common usages</summary>
-
-          \`\`\`sh
-          # Download all artifacts
-          mkdir /tmp/iree_e2e_test_artifacts
-          gcloud storage cp -r "\${E2E_TEST_ARTIFACTS_DIR_URL?}/*" /tmp/iree_e2e_test_artifacts
-          \`\`\`
-
-          \`\`\`sh
-          # Download execution benchmark results and traces
-          mkdir /tmp/iree_benchmark_results
-          gcloud storage cp -r "\${EXECUTION_BENCHMARK_RESULTS_DIR_URL?}/*" /tmp/iree_benchmark_results
-          \`\`\`
-          </details>
-
-          To run benchmarks locally with the CI-built e2e test artifacts, see [IREE Benchmark Suites](
-          https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/developers/developing_iree/benchmark_suites.md#3-fetch-the-benchmark-artifacts).
-          EOF
+          url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}"

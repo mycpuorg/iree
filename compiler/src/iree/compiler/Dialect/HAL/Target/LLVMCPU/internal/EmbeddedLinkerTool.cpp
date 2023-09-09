@@ -6,6 +6,7 @@
 
 #include "iree/compiler/Dialect/HAL/Target/LLVMCPU/LinkerTool.h"
 #include "iree/compiler/Utils/ToolUtils.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/FileSystem.h"
@@ -38,7 +39,7 @@ namespace HAL {
 // it to tools or use it ourselves to generate backtraces but since all release
 // usage should be stripped nothing relies upon it.
 class EmbeddedLinkerTool : public LinkerTool {
- public:
+public:
   using LinkerTool::LinkerTool;
 
   std::string getEmbeddedToolPath() const {
@@ -52,13 +53,15 @@ class EmbeddedLinkerTool : public LinkerTool {
     // Fall back to check for setting the linker explicitly via environment
     // variables.
     char *envVarPath = std::getenv("IREE_LLVM_EMBEDDED_LINKER_PATH");
-    if (envVarPath && envVarPath[0] != '\0') return std::string(envVarPath);
+    if (envVarPath && envVarPath[0] != '\0')
+      return std::string(envVarPath);
 
     // No explicit linker specified, search the install/build dir or env.
     const SmallVector<std::string> &toolNames{"iree-lld", "lld", "ld.lld",
                                               "lld-link"};
     std::string toolPath = findTool(toolNames);
-    if (!toolPath.empty()) return toolPath;
+    if (!toolPath.empty())
+      return toolPath;
 
     llvm::errs()
         << "error: required embedded linker tool (typically `lld`) not found "
@@ -71,9 +74,9 @@ class EmbeddedLinkerTool : public LinkerTool {
     return "";
   }
 
-  LogicalResult configureModule(
-      llvm::Module *llvmModule,
-      ArrayRef<llvm::Function *> exportedFuncs) override {
+  LogicalResult
+  configureModule(llvm::Module *llvmModule,
+                  ArrayRef<llvm::Function *> exportedFuncs) override {
     for (auto &llvmFunc : *llvmModule) {
       // -fno-plt - prevent PLT on calls to imports.
       llvmFunc.addFnAttr("nonlazybind");
@@ -87,7 +90,7 @@ class EmbeddedLinkerTool : public LinkerTool {
     // the downside of making some tooling (disassemblers/decompilers/binary
     // size analysis tools/etc) a bit harder to work with, though, so when
     // compiling in debug mode we export all the functions.
-    if (targetOptions.debugSymbols) {
+    if (targetOptions.target.debugSymbols) {
       for (auto llvmFunc : exportedFuncs) {
         llvmFunc->setVisibility(
             llvm::GlobalValue::VisibilityTypes::DefaultVisibility);
@@ -103,8 +106,9 @@ class EmbeddedLinkerTool : public LinkerTool {
     return success();
   }
 
-  std::optional<Artifacts> linkDynamicLibrary(
-      StringRef libraryName, ArrayRef<Artifact> objectFiles) override {
+  std::optional<Artifacts>
+  linkDynamicLibrary(StringRef libraryName,
+                     ArrayRef<Artifact> objectFiles) override {
     Artifacts artifacts;
 
     // Create the shared object name; if we only have a single input object we
@@ -118,7 +122,8 @@ class EmbeddedLinkerTool : public LinkerTool {
     artifacts.libraryFile.close();
 
     std::string embeddedToolPath = getEmbeddedToolPath();
-    if (embeddedToolPath.empty()) return std::nullopt;
+    if (embeddedToolPath.empty())
+      return std::nullopt;
 
     SmallVector<std::string, 8> flags = {
         embeddedToolPath,
@@ -137,7 +142,7 @@ class EmbeddedLinkerTool : public LinkerTool {
 
     // Avoids including any libc/startup files that initialize the CRT as
     // we don't use any of that. Our shared libraries must be freestanding.
-    flags.push_back("-nostdlib");  // -nodefaultlibs + -nostartfiles
+    flags.push_back("-nostdlib"); // -nodefaultlibs + -nostartfiles
 
     // Statically link all dependencies so we don't have any runtime deps.
     // We cannot have any imports in the module we produce.
@@ -181,7 +186,7 @@ class EmbeddedLinkerTool : public LinkerTool {
     flags.push_back("--hash-style=sysv");
 
     // Strip debug information (only, no relocations) when not requested.
-    if (!targetOptions.debugSymbols) {
+    if (!targetOptions.target.debugSymbols) {
       flags.push_back("--strip-debug");
     }
 
@@ -211,12 +216,13 @@ class EmbeddedLinkerTool : public LinkerTool {
   }
 };
 
-std::unique_ptr<LinkerTool> createEmbeddedLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions) {
+std::unique_ptr<LinkerTool>
+createEmbeddedLinkerTool(const llvm::Triple &targetTriple,
+                         LLVMTargetOptions &targetOptions) {
   return std::make_unique<EmbeddedLinkerTool>(targetTriple, targetOptions);
 }
 
-}  // namespace HAL
-}  // namespace IREE
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace HAL
+} // namespace IREE
+} // namespace iree_compiler
+} // namespace mlir

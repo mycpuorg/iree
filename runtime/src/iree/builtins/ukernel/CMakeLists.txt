@@ -35,32 +35,29 @@ iree_cc_library(
     internal_headers
   HDRS
     "common.h"
-    "elementwise.h"
+    "exported_bits.h"
     "mmt4d.h"
     "mmt4d_internal.h"
     "pack.h"
     "pack_internal.h"
     "query_tile_sizes.h"
     "query_tile_sizes_internal.h"
+    "static_assert.h"
     "unpack.h"
     "unpack_internal.h"
   DEPS
-    ::exported_bits
-    ::static_assert
     iree::base::core_headers
-    iree::builtins::ukernel::arch::config
   PUBLIC
 )
 
 iree_cc_library(
   NAME
-    ukernel
+    ukernel_noweak
   HDRS
     "api.h"
   SRCS
     "common.h"
-    "elementwise.c"
-    "elementwise.h"
+    "exported_bits.h"
     "mmt4d.c"
     "mmt4d.h"
     "mmt4d_internal.h"
@@ -72,6 +69,7 @@ iree_cc_library(
     "query_tile_sizes.c"
     "query_tile_sizes.h"
     "query_tile_sizes_internal.h"
+    "static_assert.h"
     "unpack.c"
     "unpack.h"
     "unpack_internal.h"
@@ -80,9 +78,85 @@ iree_cc_library(
     ::exported_bits
     ::static_assert
     iree::base::core_headers
-    iree::builtins::ukernel::arch::config
     iree::builtins::ukernel::arch::ukernel_arch
   PUBLIC
 )
+
+iree_cc_library(
+  NAME
+    zzz_weak_linklast
+  SRCS
+    "weak.c"
+  DEPS
+    ::internal_headers
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    ukernel
+  HDRS
+    "api.h"
+  DEPS
+    ::ukernel_noweak
+    ::zzz_weak_linklast
+  PUBLIC
+)
+
+if(IREE_BUILD_COMPILER AND IREE_TARGET_BACKEND_LLVM_CPU)
+
+iree_bitcode_library(
+  NAME
+    ukernel_bitcode_32bit_base
+  ARCH
+    wasm_32
+  SRCS
+    "mmt4d.c"
+    "mmt4d_tile.c"
+    "pack.c"
+    "pack_tile.c"
+    "query_tile_sizes.c"
+    "unpack_tile.c"
+    "weak.c"
+)
+
+iree_bitcode_library(
+  NAME
+    ukernel_bitcode_64bit_base
+  ARCH
+    wasm_64
+  SRCS
+    "mmt4d.c"
+    "mmt4d_tile.c"
+    "pack.c"
+    "pack_tile.c"
+    "query_tile_sizes.c"
+    "unpack_tile.c"
+    "weak.c"
+)
+
+iree_c_embed_data(
+  NAME
+    embed_ukernel_bitcode
+  SRCS
+    "runtime/src/iree/builtins/ukernel/arch/arm_64/ukernel_bitcode_arm_64.bc"
+    "runtime/src/iree/builtins/ukernel/arch/arm_64/ukernel_bitcode_arm_64_entry_points.bc"
+    "runtime/src/iree/builtins/ukernel/arch/x86_64/ukernel_bitcode_x86_64.bc"
+    "runtime/src/iree/builtins/ukernel/arch/x86_64/ukernel_bitcode_x86_64_entry_points.bc"
+    "ukernel_bitcode_32bit_base.bc"
+    "ukernel_bitcode_64bit_base.bc"
+  DEPS
+
+  C_FILE_OUTPUT
+    "ukernel_bitcode.c"
+  H_FILE_OUTPUT
+    "ukernel_bitcode.h"
+  IDENTIFIER
+    "iree_ukernel_bitcode"
+  FLATTEN
+  PUBLIC
+)
+
+endif()  # IREE_BUILD_COMPILER AND IREE_TARGET_BACKEND_LLVM_CPU
 
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###

@@ -22,10 +22,10 @@ namespace Flow {
 /// Returns failure, when the type is not handled.
 static FailureOr<TypedAttr> getZero(OpBuilder &builder, Location loc,
                                     Type elementType) {
-  if (auto intType = elementType.dyn_cast<IntegerType>()) {
+  if (auto intType = llvm::dyn_cast<IntegerType>(elementType)) {
     return cast<TypedAttr>(builder.getIntegerAttr(intType, 0));
   }
-  if (auto floatType = elementType.dyn_cast<FloatType>()) {
+  if (auto floatType = llvm::dyn_cast<FloatType>(elementType)) {
     return cast<TypedAttr>(builder.getFloatAttr(floatType, 0.0));
   }
   return failure();
@@ -109,13 +109,13 @@ struct InitializeEmptyTensorsPass
   }
 };
 
-}  // namespace
+} // namespace
 
 std::unique_ptr<Pass> createInitializeEmptyTensorsPass(bool zeroFill) {
   return std::make_unique<InitializeEmptyTensorsPass>(zeroFill);
 }
 
-}  // namespace Flow
-}  // namespace IREE
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace Flow
+} // namespace IREE
+} // namespace iree_compiler
+} // namespace mlir

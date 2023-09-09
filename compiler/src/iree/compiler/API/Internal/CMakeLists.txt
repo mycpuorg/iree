@@ -12,15 +12,16 @@ iree_add_all_subdirs()
 
 iree_cc_library(
   NAME
-    Embed
+    CompilerDriver
   HDRS
     "Diagnostics.h"
   SRCS
+    "CompilerDriver.cpp"
     "Diagnostics.cpp"
-    "Embed.cpp"
   DEPS
     LLVMSupport
     MLIRBuiltinToLLVMIRTranslation
+    MLIRBytecodeWriter
     MLIRCAPIIR
     MLIRIR
     MLIRParser
@@ -79,6 +80,7 @@ iree_cc_library(
     MLIROptLib
     MLIRPass
     MLIRSupport
+    iree::compiler::Dialect::HAL::Target
     iree::compiler::PluginAPI::PluginManager
     iree::compiler::Tools::init_passes_and_dialects
     iree::compiler::Tools::init_targets
@@ -91,7 +93,8 @@ iree_cc_library(
 set(_lld_copts)
 set(_lld_deps)
 
-if(IREE_LLD_TARGET)
+# TODO(#14086): implement linking in the installed-LLVM case.
+if(IREE_BUILD_BUNDLED_LLVM)
   # Use generator expressions to conditionally include LLD targets, providing
   # a compiler definition if not available.
   macro(_add_dependent_lld_target target not_definition)

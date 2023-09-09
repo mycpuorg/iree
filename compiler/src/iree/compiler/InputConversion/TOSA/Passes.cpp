@@ -36,7 +36,6 @@ void buildTOSAInputConversionPassPipeline(OpPassManager &passManager) {
   // In the future it would be nice if we could have all of flow be both scf
   // and cfg compatible.
   passManager.addNestedPass<func::FuncOp>(tosa::createTosaToSCF());
-  passManager.addNestedPass<func::FuncOp>(createTopLevelSCFToCFGPass());
 
   // We also don't handle calls well on the old codepath; until we remove the
   // use of the CFG we can continue inlining.
@@ -51,6 +50,8 @@ void buildTOSAInputConversionPassPipeline(OpPassManager &passManager) {
   passManager.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
 
   tosa::addTosaToLinalgPasses(passManager);
+  passManager.addNestedPass<func::FuncOp>(
+      iree_compiler::createConverti48Toi64());
 
   // Sometimes we generate more TOSA operations during the lowering to linalg.
   passManager.addNestedPass<func::FuncOp>(tosa::createTosaToArith());
@@ -74,8 +75,8 @@ void buildTOSAInputConversionPassPipeline(OpPassManager &passManager) {
 
 namespace {
 #define GEN_PASS_REGISTRATION
-#include "iree/compiler/InputConversion/TOSA/Passes.h.inc"  // IWYU pragma: export
-}  // namespace
+#include "iree/compiler/InputConversion/TOSA/Passes.h.inc" // IWYU pragma: export
+} // namespace
 
 void registerTOSAConversionPasses() {
   // Generated.
@@ -85,5 +86,5 @@ void registerTOSAConversionPasses() {
   registerTOSAConversionPassPipeline();
 }
 
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace iree_compiler
+} // namespace mlir

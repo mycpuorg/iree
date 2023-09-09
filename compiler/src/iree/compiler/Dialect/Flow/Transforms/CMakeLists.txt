@@ -45,9 +45,13 @@ iree_cc_library(
     "EraseUnusedLinalgOperands.cpp"
     "ExpandTensorShapes.cpp"
     "ExportBenchmarkFuncs.cpp"
+    "FoldUnitExtentDims.cpp"
     "FormDispatchRegions.cpp"
     "FormDispatchWorkgroups.cpp"
+    "FormScalarDispatches.cpp"
+    "FuseDequantizationMatmul.cpp"
     "FusionOfTensorOps.cpp"
+    "GeneralizeLinalgNamedOps.cpp"
     "InferNumericNarrowing.cpp"
     "InitializeEmptyTensors.cpp"
     "InjectDispatchTracing.cpp"
@@ -60,11 +64,12 @@ iree_cc_library(
     "Passes.cpp"
     "RaiseSpecialOps.cpp"
     "RegionOpUtils.cpp"
+    "RemoveZeroExtentTensors.cpp"
     "SetEncoding.cpp"
     "SplitReduction.cpp"
-    "StripAndSplatConstantVariables.cpp"
     "StripSignedness.cpp"
     "TensorPadToTensorInsertSlice.cpp"
+    "TopLevelSCFToCFG.cpp"
     "VerifyInputLegality.cpp"
   DEPS
     ::PassesIncGen
@@ -75,12 +80,12 @@ iree_cc_library(
     IREELinalgExtTransforms
     IREELinalgExtUtils
     IREELinalgTransformDialect
-    IREELinalgTransformDialectPasses
     LLVMSupport
     MLIRAffineDialect
     MLIRAnalysis
     MLIRArithDialect
     MLIRArithUtils
+    MLIRComplexDialect
     MLIRControlFlowDialect
     MLIRFuncDialect
     MLIRIR
@@ -95,6 +100,7 @@ iree_cc_library(
     MLIRParser
     MLIRPass
     MLIRSCFDialect
+    MLIRSCFToControlFlow
     MLIRSupport
     MLIRTensorDialect
     MLIRTensorTransforms
@@ -102,6 +108,7 @@ iree_cc_library(
     MLIRTilingInterface
     MLIRTosaDialect
     MLIRTransformDialect
+    MLIRTransformDialectTransforms
     MLIRTransformUtils
     MLIRTransforms
     iree::compiler::Dialect::Flow::Conversion::TensorToFlow

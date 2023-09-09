@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/Target/LLVMCPU/LinkerTool.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -47,19 +48,19 @@ static const char *getNDKHostPlatform() {
 // Returns the canonical target name for the Android NDK prebuilt versions.
 static const char *getNDKTargetPlatform(const Triple &targetTriple) {
   switch (targetTriple.getArch()) {
-    case Triple::arm:
-      return "armv7a";
-    case Triple::aarch64:
-      return "aarch64";
-    case Triple::x86:
-      return "i686";
-    case Triple::x86_64:
-      return "x86_64";
-    default:
-      llvm::errs()
-          << "No (known) Android NDK prebuilt name for this target platform ('"
-          << targetTriple.str() << "')";
-      return "";
+  case Triple::arm:
+    return "armv7a";
+  case Triple::aarch64:
+    return "aarch64";
+  case Triple::x86:
+    return "i686";
+  case Triple::x86_64:
+    return "x86_64";
+  default:
+    llvm::errs()
+        << "No (known) Android NDK prebuilt name for this target platform ('"
+        << targetTriple.str() << "')";
+    return "";
   }
 }
 
@@ -101,12 +102,13 @@ static const char *getNDKTargetPlatform(const Triple &targetTriple) {
 //   $ android-ndk-r23/toolchains/llvm/prebuilt/linux-x86_64/bin/ld --version
 //   LLD 12.0.5 (/buildbot/src/android/llvm-toolchain/out/llvm-project/lld ...
 class AndroidLinkerTool : public LinkerTool {
- public:
+public:
   using LinkerTool::LinkerTool;
 
   std::string getSystemToolPath() const override {
     auto toolPath = LinkerTool::getSystemToolPath();
-    if (!toolPath.empty()) return toolPath;
+    if (!toolPath.empty())
+      return toolPath;
 
     // ANDROID_NDK must be set for us to infer the tool path.
     char *androidNDKPath = std::getenv("ANDROID_NDK");
@@ -117,7 +119,7 @@ class AndroidLinkerTool : public LinkerTool {
 
     // Extract the Android version from the `android30` like triple piece.
     llvm::VersionTuple androidEnv = targetTriple.getEnvironmentVersion();
-    unsigned androidVersion = androidEnv.getMajor();  // like '30'
+    unsigned androidVersion = androidEnv.getMajor(); // like '30'
 
     // Select prebuilt toolchain based on both host and target
     // architecture/platform:
@@ -133,8 +135,9 @@ class AndroidLinkerTool : public LinkerTool {
         .str();
   }
 
-  std::optional<Artifacts> linkDynamicLibrary(
-      StringRef libraryName, ArrayRef<Artifact> objectFiles) override {
+  std::optional<Artifacts>
+  linkDynamicLibrary(StringRef libraryName,
+                     ArrayRef<Artifact> objectFiles) override {
     Artifacts artifacts;
 
     // Create the shared object name; if we only have a single input object we
@@ -156,7 +159,7 @@ class AndroidLinkerTool : public LinkerTool {
         // It matters that this flag isn't prefixed with --for-linker=. Doing so
         // results in a dlopen error: 'cannot locate symbol "main" referenced by
         // "iree_dylib_foo.so"'
-        "-nostdlib",  // -nodefaultlibs + -nostartfiles
+        "-nostdlib", // -nodefaultlibs + -nostartfiles
 
         "-o " + artifacts.libraryFile.path,
     };
@@ -205,7 +208,7 @@ class AndroidLinkerTool : public LinkerTool {
     };
 
     // Strip debug information (only, no relocations) when not requested.
-    if (!targetOptions.debugSymbols) {
+    if (!targetOptions.target.debugSymbols) {
       flagsToPrefixForLinker.push_back("--strip-debug");
     }
 
@@ -216,19 +219,21 @@ class AndroidLinkerTool : public LinkerTool {
     flagsToPrefixForLinker.clear();
 
     auto commandLine = llvm::join(flags, " ");
-    if (failed(runLinkCommand(commandLine))) return std::nullopt;
+    if (failed(runLinkCommand(commandLine)))
+      return std::nullopt;
     return artifacts;
   }
 };
 
-std::unique_ptr<LinkerTool> createAndroidLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions) {
+std::unique_ptr<LinkerTool>
+createAndroidLinkerTool(const llvm::Triple &targetTriple,
+                        LLVMTargetOptions &targetOptions) {
   assert(targetTriple.isAndroid() &&
          "only use the AndroidLinkerTool for Android targets");
   return std::make_unique<AndroidLinkerTool>(targetTriple, targetOptions);
 }
 
-}  // namespace HAL
-}  // namespace IREE
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace HAL
+} // namespace IREE
+} // namespace iree_compiler
+} // namespace mlir

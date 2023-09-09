@@ -15,7 +15,6 @@
 #include "iree/base/internal/file_io.h"
 #include "iree/base/internal/math.h"
 #include "iree/base/internal/path.h"
-#include "iree/base/tracing.h"
 #include "iree/modules/hal/module.h"
 #include "iree/tooling/device_util.h"
 #include "iree/tooling/numpy_io.h"
@@ -198,6 +197,9 @@ static iree_status_t iree_trace_replay_load_bytecode_module(
   yaml_node_t* path_node = NULL;
   IREE_RETURN_IF_ERROR(iree_yaml_mapping_find(document, module_node,
                                               IREE_SV("path"), &path_node));
+  yaml_node_t* mmap_node = NULL;
+  IREE_RETURN_IF_ERROR(iree_yaml_mapping_try_find(document, module_node,
+                                                  IREE_SV("mmap"), &mmap_node));
 
   // Special case sourcing from stdin, which is useful for fast iteration and
   // tests where iree-compile output is piped directly into the replay tool.
@@ -223,8 +225,10 @@ static iree_status_t iree_trace_replay_load_bytecode_module(
     IREE_RETURN_IF_ERROR(iree_file_path_join(
         replay->root_path, iree_yaml_node_as_string(path_node),
         replay->host_allocator, &full_path));
-    status = iree_file_read_contents(full_path, replay->host_allocator,
-                                     &flatbuffer_contents);
+    status = iree_file_read_contents(
+        full_path,
+        mmap_node ? IREE_FILE_READ_FLAG_MMAP : IREE_FILE_READ_FLAG_PRELOAD,
+        replay->host_allocator, &flatbuffer_contents);
     iree_allocator_free(replay->host_allocator, full_path);
   }
 
@@ -757,7 +761,7 @@ static iree_status_t iree_trace_replay_parse_hal_shape(
     }
     if (shape_rank >= shape_capacity) {
       return iree_make_status(IREE_STATUS_OUT_OF_RANGE,
-                              "(%zu): shape rank overflow (>%zu)",
+                              "(%zu): shape rank overflow (>%" PRIhsz ")",
                               shape_node->start_mark.line, shape_capacity);
     }
     shape[shape_rank++] = (iree_hal_dim_t)dim;
@@ -982,7 +986,7 @@ static iree_status_t iree_trace_replay_parse_hal_buffer(
           .type = IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL,
           .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
       },
-      allocation_size, iree_const_byte_span_empty(), &buffer));
+      allocation_size, &buffer));
 
   *out_result =
       iree_vm_make_variant_ref_assign(iree_hal_buffer_move_ref(buffer));
@@ -1049,17 +1053,17 @@ static iree_status_t iree_trace_replay_parse_hal_buffer_view(
         .shape_rank = shape_rank,
     };
     IREE_RETURN_IF_ERROR(iree_hal_buffer_view_generate_buffer(
-        iree_hal_device_allocator(replay->device), shape_rank, shape,
-        element_type, encoding_type,
+        replay->device, iree_hal_device_allocator(replay->device), shape_rank,
+        shape, element_type, encoding_type,
         (iree_hal_buffer_params_t){
             .type = IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL,
             .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
         },
         iree_trace_replay_generate_hal_buffer_callback, &params, &buffer_view));
   } else {
-    IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer(
-        iree_hal_device_allocator(replay->device), shape_rank, shape,
-        element_type, encoding_type,
+    IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
+        replay->device, iree_hal_device_allocator(replay->device), shape_rank,
+        shape, element_type, encoding_type,
         (iree_hal_buffer_params_t){
             .type = IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL,
             .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
@@ -1084,7 +1088,7 @@ static iree_status_t iree_trace_replay_parse_inline_hal_buffer(
     yaml_node_t* value_node, iree_vm_variant_t* out_result) {
   iree_hal_buffer_view_t* buffer_view = NULL;
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_parse(
-      iree_yaml_node_as_string(value_node),
+      iree_yaml_node_as_string(value_node), replay->device,
       iree_hal_device_allocator(replay->device), &buffer_view));
   *out_result = iree_vm_make_variant_ref_assign(
       iree_hal_buffer_retain_ref(iree_hal_buffer_view_buffer(buffer_view)));
@@ -1102,7 +1106,7 @@ static iree_status_t iree_trace_replay_parse_inline_hal_buffer_view(
     yaml_node_t* value_node, iree_vm_variant_t* out_result) {
   iree_hal_buffer_view_t* buffer_view = NULL;
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_parse(
-      iree_yaml_node_as_string(value_node),
+      iree_yaml_node_as_string(value_node), replay->device,
       iree_hal_device_allocator(replay->device), &buffer_view));
   *out_result = iree_vm_make_variant_ref_assign(
       iree_hal_buffer_view_move_ref(buffer_view));
@@ -1171,6 +1175,7 @@ static iree_status_t iree_trace_replay_parse_item(
 static iree_status_t iree_trace_replay_parse_item_sequence(
     iree_trace_replay_t* replay, yaml_document_t* document,
     yaml_node_t* sequence_node, iree_vm_list_t* target_list) {
+  if (!sequence_node) return iree_ok_status();
   for (yaml_node_item_t* item = sequence_node->data.sequence.items.start;
        item != sequence_node->data.sequence.items.top; ++item) {
     yaml_node_t* item_node = yaml_document_get_node(document, *item);
@@ -1210,6 +1215,7 @@ static iree_status_t iree_trace_replay_parse_result_item(
 static iree_status_t iree_trace_replay_parse_result_item_sequence(
     iree_trace_replay_t* replay, yaml_document_t* document,
     yaml_node_t* sequence_node, iree_vm_list_t* source_list) {
+  if (!sequence_node) return iree_ok_status();
   iree_host_size_t i = 0;
   for (yaml_node_item_t* item = sequence_node->data.sequence.items.start;
        item != sequence_node->data.sequence.items.top; ++item, ++i) {
@@ -1450,8 +1456,6 @@ static iree_status_t iree_trace_replay_event_numpy_load(
   buffer_params.usage = IREE_HAL_BUFFER_USAGE_DEFAULT;
   buffer_params.access = IREE_HAL_MEMORY_ACCESS_READ;
   buffer_params.type = IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL;
-  iree_hal_allocator_t* device_allocator =
-      iree_hal_device_allocator(replay->device);
 
   if (iree_status_is_ok(status)) {
     for (yaml_node_item_t* item = arrays_node->data.sequence.items.start;
@@ -1465,7 +1469,8 @@ static iree_status_t iree_trace_replay_event_numpy_load(
       iree_hal_buffer_view_t* buffer_view = NULL;
       status = iree_numpy_npy_load_ndarray(
           file, IREE_NUMPY_NPY_LOAD_OPTION_DEFAULT, buffer_params,
-          device_allocator, &buffer_view);
+          replay->device, iree_hal_device_allocator(replay->device),
+          &buffer_view);
       if (!iree_status_is_ok(status)) break;
 
       // Route the loaded value to its destination.

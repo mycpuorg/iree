@@ -38,15 +38,10 @@ hal.executable @abs_ex_dispatch_0 {
 // CHECK-LABEL: llvm.func @abs_ex_dispatch_0
 //  CHECK-SAME: (%[[ARG0:.+]]: !llvm.ptr {llvm.align = 16 : i32, llvm.noalias},
 //  CHECK-SAME:  %[[ARG1:.+]]: !llvm.ptr {llvm.align = 16 : i32, llvm.noalias, llvm.readonly},
-//  CHECK-SAME:  %{{.*}}: !llvm.ptr {llvm.align = 16 : i32, llvm.noalias})
-//       CHECK:   %[[UNDEF:.+]] = llvm.mlir.undef : !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
-//       CHECK:   %[[BASE_PTR_INSERT:.+]] = llvm.insertvalue %arg1, %[[UNDEF]][0] : !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
-//       CHECK:   %[[ALIGNED_PTR_INSERT:.+]] = llvm.insertvalue %arg1, %[[BASE_PTR_INSERT]][1] : !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
-//       CHECK:   %[[OFFSET:.+]] = llvm.mlir.constant(32 : index) : i64
-//       CHECK:   %[[OFFSET_INSERT:.+]] = llvm.insertvalue %[[OFFSET]], %[[ALIGNED_PTR_INSERT]][2] : !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
-//       CHECK:    nvvm.read.ptx.sreg.tid.x
-//       CHECK:    llvm.fadd
-
+//  CHECK-SAME:  %[[ARG2:.+]]: !llvm.ptr {llvm.align = 16 : i32, llvm.noalias})
+//  CHECK: %[[FADD:.+]] = llvm.fadd %{{.*}}, %{{.*}}  : f32
+//  CHECK: %[[ADDR:.+]] = llvm.getelementptr %[[ARG2]][%{{.*}}] : (!llvm.ptr, i64) -> !llvm.ptr, f32
+//  CHECK: llvm.store %[[FADD]], %[[ADDR]] : f32, !llvm.ptr
 // -----
 
 #pipeline_layout = #hal.pipeline.layout<push_constants = 4, sets = [
@@ -93,28 +88,19 @@ hal.executable @abs_dynamic {
 //  CHECK-SAME:  %[[ARG5:[a-zA-Z0-9]+]]: i32,
 //  CHECK-SAME:  %[[ARG6:[a-zA-Z0-9]+]]: i32)
 //   CHECK-DAG:   %[[OFFSET:.+]] = llvm.zext %[[ARG3]] : i32 to i64
-//   CHECK-DAG:   %[[D0:.+]] = llvm.zext %[[ARG4]] : i32 to i64
 //   CHECK-DAG:   %[[D1:.+]] = llvm.zext %[[ARG5]] : i32 to i64
 //   CHECK-DAG:   %[[D2:.+]] = llvm.zext %[[ARG6]] : i32 to i64
-//       CHECK:   %[[UNDEF:.+]] = llvm.mlir.undef : !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
-//       CHECK:   %[[BASE_PTR_INSERT:.+]] = llvm.insertvalue %[[ARG1]], %[[UNDEF]][0] : !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
-//       CHECK:   %[[ALIGNED_PTR_INSERT:.+]] = llvm.insertvalue %[[ARG1]], %[[BASE_PTR_INSERT]][1] : !llvm.struct<(ptr, ptr, i64, array<3 x i64>, array<3 x i64>)>
-//       CHECK:   %[[C4:.+]] = llvm.mlir.constant(4 : i64)
-//       CHECK:   %[[ELEM_OFFSET:.+]] = llvm.udiv %[[OFFSET]], %[[C4]]
-//       CHECK:   %[[OFFSET_INSERT:.+]] = llvm.insertvalue %[[ELEM_OFFSET]], %[[ALIGNED_PTR_INSERT]][2]
-//       CHECK:   %[[D0_INSERT:.+]] = llvm.insertvalue %[[D0]], %[[OFFSET_INSERT]][3, 0]
-//       CHECK:   %[[D1_INSERT:.+]] = llvm.insertvalue %[[D1]], %[[D0_INSERT]][3, 1]
-//       CHECK:   %[[D2_INSERT:.+]] = llvm.insertvalue %[[D2]], %[[D1_INSERT]][3, 2]
-//       CHECK:   %[[STRIDE0:.+]] = llvm.mlir.constant(1 : index)
-//       CHECK:   %[[STRIDE0_INSERT:.+]] = llvm.insertvalue %[[STRIDE0]], %[[D2_INSERT]][4, 2]
-//       CHECK:   %[[D2_EXTRACT:.+]] = llvm.extractvalue %[[STRIDE0_INSERT]][3, 2]
-//       CHECK:   %[[STRIDE0_CONSTANT:.+]] = llvm.mlir.constant(1 : i64)
-//       CHECK:   %[[STRIDE1:.+]] = llvm.mul %[[STRIDE0_CONSTANT]], %[[D2_EXTRACT]]
-//       CHECK:   %[[STRIDE1_INSERT:.+]] = llvm.insertvalue %[[STRIDE1]], %[[STRIDE0_INSERT]][4, 1]
-//       CHECK:   %[[D1_EXTRACT:.+]] = llvm.extractvalue %[[STRIDE1_INSERT]][3, 1]
-//       CHECK:   %[[STRIDE2:.+]] = llvm.mul %[[STRIDE1]], %[[D1_EXTRACT]]
-//       CHECK:   llvm.insertvalue %[[STRIDE2]], %[[STRIDE1_INSERT]][4, 0]
-//       CHECK:   llvm.fadd
+//   CHECK: %[[GEP1:.+]] = llvm.getelementptr %[[ARG1]][%{{.*}}] : (!llvm.ptr, i64) -> !llvm.ptr, f32
+//   CHECK: %[[GEP:.+]] = llvm.getelementptr %[[GEP1]][%{{.*}}] : (!llvm.ptr, i64) -> !llvm.ptr, f32
+//   CHECK: %[[LOAD:.+]] = llvm.load %[[GEP]] : !llvm.ptr -> f32
+//   CHECK: %[[GEP2:.+]] = llvm.getelementptr %[[ARG0]][%{{.*}}] : (!llvm.ptr, i64) -> !llvm.ptr, i32
+//   CHECK: llvm.load %[[GEP2]] : !llvm.ptr -> i32
+//   CHECK: %[[FADD:.+]] = llvm.fadd %[[LOAD]], %{{.*}}  : f32
+//   CHECK: %[[ADD:.+]] = llvm.add
+//   CHECK: %[[ADD2:.+]] = llvm.add
+//   CHECK: %[[ADDR:.+]] = llvm.getelementptr %[[ARG2]][%[[ADD2]]] : (!llvm.ptr, i64) -> !llvm.ptr, f32
+//   CHECK: llvm.store %[[FADD]], %[[ADDR]] : f32, !llvm.ptr
+
 
 // -----
 
@@ -195,9 +181,8 @@ hal.executable @mixed_type {
 // CHECK-LABEL: llvm.func @mixed_type
 //  CHECK-SAME: (%[[ARG0:.+]]: !llvm.ptr {llvm.align = 16 : i32, llvm.noalias},
 //  CHECK-SAME:  %{{.*}}: !llvm.ptr {llvm.align = 16 : i32, llvm.noalias})
-//       CHECK:   llvm.insertvalue %[[ARG0]], %{{.*}}[0] : !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
-//       CHECK:   llvm.insertvalue %[[ARG0]], %{{.*}}[1] : !llvm.struct<(ptr, ptr, i64, array<1 x i64>, array<1 x i64>)>
 //       CHECK:   nvvm.read.ptx.sreg.tid.x
+//       CHECK:   llvm.getelementptr %[[ARG0]][4] : (!llvm.ptr) -> !llvm.ptr, f32
 //       CHECK:   llvm.fadd
 
 // -----
@@ -383,3 +368,31 @@ hal.executable @complex {
 //   CHECK-NOT: unrealized
 //       CHECK: llvm.return
 
+// -----
+
+// Check that we don't choke on memref of index.
+#pipeline_layout = #hal.pipeline.layout<push_constants = 0, sets = [
+  #hal.descriptor_set.layout<0, bindings = [
+    #hal.descriptor_set.binding<0, storage_buffer>
+  ]>
+]>
+hal.executable @shared_memory_lowering_index {
+  hal.executable.variant @cuda, target = <"cuda", "cuda-nvptx-fb"> {
+    hal.executable.export @shared_memory_lowering_index layout(#pipeline_layout)
+    builtin.module {
+      func.func @shared_memory_lowering_index() {
+        %c0 = arith.constant 0 : index
+        %cst = arith.constant dense<0> : vector<4xindex>
+        %0 = memref.alloc() : memref<1x16x32xindex, #gpu.address_space<workgroup>>
+        vector.store %cst, %0[%c0, %c0, %c0] : memref<1x16x32xindex, #gpu.address_space<workgroup>>, vector<4xindex>
+        return
+      }
+    }
+  }
+}
+//       CHECK: llvm.mlir.global external @__dynamic_shared_memory__() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+// CHECK-LABEL: llvm.func @shared_memory_lowering_index() {
+//       CHECK: %{{.*}} = llvm.mlir.addressof @__dynamic_shared_memory__ : !llvm.ptr<array<0 x i8>, 3>
+//  CHECK-NEXT: %{{.*}} = llvm.mlir.constant(0 : i64) : i64
+//  CHECK-NEXT: %{{.*}} = llvm.mlir.constant(0 : i64) : i64
+//  CHECK-NEXT: %{{.*}} = llvm.getelementptr %{{.*}} : (!llvm.ptr<array<0 x i8>, 3>, i64, i64) -> !llvm.ptr<array<0 x i8>, 3>

@@ -187,8 +187,9 @@ static iree_status_t iree_run_trace_file(iree_string_view_t root_path,
     // loading we can do that now before processing subsequent events.
     if (!have_parsed_inputs && replay.device) {
       status = iree_tooling_parse_into_variant_list(
-          iree_hal_device_allocator(replay.device), FLAG_input_list().values,
-          FLAG_input_list().count, replay.host_allocator, replay.inputs);
+          replay.device, iree_hal_device_allocator(replay.device),
+          FLAG_input_list().values, FLAG_input_list().count,
+          replay.host_allocator, replay.inputs);
       have_parsed_inputs = true;
     }
     if (!iree_status_is_ok(status)) break;
@@ -239,6 +240,8 @@ static iree_status_t iree_run_trace_files(int file_count, char** file_paths,
 }
 
 int main(int argc, char** argv) {
+  IREE_TRACE_APP_ENTER();
+
   iree_flags_set_usage(
       "iree-run-trace",
       "Executes a YAML trace file containing a sequence of context operations\n"
@@ -258,6 +261,7 @@ int main(int argc, char** argv) {
       "module:\n"
       "  type: bytecode\n"
       "  path: ../build/some_module.vmfb\n"
+      "  mmap: true\n"
       "---\n"
       "type: call\n"
       "function: module.mul\n"
@@ -359,7 +363,8 @@ int main(int argc, char** argv) {
   if (argc <= 1) {
     fprintf(stderr,
             "no trace files provided; pass one or more yaml file paths");
-    return 1;
+    IREE_TRACE_APP_EXIT(EXIT_FAILURE);
+    return EXIT_FAILURE;
   }
 
   iree_vm_instance_t* instance = NULL;
@@ -369,10 +374,12 @@ int main(int argc, char** argv) {
     status = iree_run_trace_files(argc - 1, argv + 1, instance);
   }
   iree_vm_instance_release(instance);
+  int exit_code = EXIT_SUCCESS;
   if (!iree_status_is_ok(status)) {
     iree_status_fprint(stderr, status);
     iree_status_free(status);
-    return 1;
+    exit_code = EXIT_FAILURE;
   }
-  return 0;
+  IREE_TRACE_APP_EXIT(exit_code);
+  return exit_code;
 }

@@ -10,12 +10,31 @@
 #include "iree/compiler/InputConversion/StableHLO/Rewriters.h"
 #include "iree/compiler/InputConversion/StableHLO/TypeConversion.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "stablehlo/dialect/StablehloOps.h"
 
 namespace mlir::iree_compiler::stablehlo {
 namespace {
+
+template <typename OpTy>
+struct ScalarHloToFuncPatterns final : OpConversionPattern<OpTy> {
+  ScalarHloToFuncPatterns(TypeConverter &typeConverter, MLIRContext *context,
+                          PatternBenefit benefit = 1)
+      : OpConversionPattern<OpTy>(typeConverter, context, benefit) {}
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isa<mlir::func::FuncOp>(op->getParentOp())) {
+      return rewriter.notifyMatchFailure(op,
+                                         "Return must be inside a function");
+    }
+    mlir::Operation::operand_range operands = op.getOperands();
+    rewriter.replaceOpWithNewOp<mlir::func::ReturnOp>(op, operands);
+    return success();
+  }
+};
 template <typename OpTy>
 struct ScalarHloToArithmeticPattern final : OpConversionPattern<OpTy> {
   ScalarHloToArithmeticPattern(
@@ -25,10 +44,11 @@ struct ScalarHloToArithmeticPattern final : OpConversionPattern<OpTy> {
       : OpConversionPattern<OpTy>(typeConverter, context, benefit),
         filterFn(filterFn) {}
 
-  LogicalResult matchAndRewrite(
-      OpTy op, typename OpTy::Adaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    if (filterFn && !filterFn(op)) return failure();
+  LogicalResult
+  matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (filterFn && !filterFn(op))
+      return failure();
 
     auto isScalar = [](Value v) {
       return cast<ShapedType>(v.getType()).getRank() == 0;
@@ -41,7 +61,8 @@ struct ScalarHloToArithmeticPattern final : OpConversionPattern<OpTy> {
 
     auto resultTy = dyn_cast_or_null<ShapedType>(
         this->getTypeConverter()->convertType(op->getResultTypes().front()));
-    if (!resultTy) return failure();
+    if (!resultTy)
+      return failure();
 
     SmallVector<Value> operands;
     for (Value operand : adaptor.getOperands()) {
@@ -50,17 +71,18 @@ struct ScalarHloToArithmeticPattern final : OpConversionPattern<OpTy> {
     }
     Value scalarResult = mlir::stablehlo::StableHloOpToStdScalarOp::mapOp(
         op, resultTy.getElementType(), operands, &rewriter);
-    if (!scalarResult) return failure();
+    if (!scalarResult)
+      return failure();
     rewriter.replaceOpWithNewOp<tensor::FromElementsOp>(op, resultTy,
                                                         scalarResult);
     return success();
   }
 
- private:
+private:
   llvm::function_ref<bool(Operation *)> filterFn;
 };
 
-}  // namespace
+} // namespace
 
 namespace detail {
 void populateScalarHloToArithConversionPatterns(
@@ -114,9 +136,11 @@ void populateScalarHloToArithConversionPatterns(
       ScalarHloToArithmeticPattern<mlir::stablehlo::SqrtOp>,
       ScalarHloToArithmeticPattern<mlir::stablehlo::SubtractOp>,
       ScalarHloToArithmeticPattern<mlir::stablehlo::TanhOp>,
-      ScalarHloToArithmeticPattern<mlir::stablehlo::XorOp> >(typeConverter,
-                                                             context, filterFn);
+      ScalarHloToArithmeticPattern<mlir::stablehlo::XorOp>>(typeConverter,
+                                                            context, filterFn);
+  patterns->add<ScalarHloToFuncPatterns<mlir::stablehlo::ReturnOp>>(
+      typeConverter, context);
 }
-}  // namespace detail
+} // namespace detail
 
-}  // namespace mlir::iree_compiler::stablehlo
+} // namespace mlir::iree_compiler::stablehlo

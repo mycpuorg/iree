@@ -11,47 +11,47 @@ vm.module @hal {
 vm.import private @ex.shared_device() -> !vm.ref<!hal.device>
 attributes {nosideeffects}
 
-vm.import private @ex.submit_and_wait(
+// Creates a file mapped into a byte range of a host buffer.
+// EXPERIMENTAL: may be removed in future versions.
+vm.import private @ex.file.from_memory(
   %device : !vm.ref<!hal.device>,
-  %command_buffer : !vm.ref<!hal.command_buffer>
-)
-attributes {vm.yield}
+  %queue_affinity : i64,
+  %access : i32,
+  %buffer : !vm.buffer,
+  %offset : i64,
+  %length : i64,
+  %flags : i32
+) -> !vm.ref<!hal.file>
 
 //===----------------------------------------------------------------------===//
 // iree_hal_allocator_t
 //===----------------------------------------------------------------------===//
 
-// Allocates a buffer from the allocator.
+// Allocates a buffer from the allocator. The resulting buffer will have a
+// length of at least that requested.
 vm.import private @allocator.allocate(
   %allocator : !vm.ref<!hal.allocator>,
+  %queue_affinity : i64,
   %memory_types : i32,
   %buffer_usage : i32,
   %allocation_size : i64
 ) -> !vm.ref<!hal.buffer>
+attributes {minimum_version = 1 : i32}
 
-// Allocates a buffer from the allocator with an initial value provided by a
-// VM byte buffer.
-vm.import private @allocator.allocate.initialized(
-  %allocator : !vm.ref<!hal.allocator>,
-  %memory_types : i32,
-  %buffer_usage : i32,
-  %source : !vm.buffer,
-  %offset : i64,
-  %length : i64
-) -> !vm.ref<!hal.buffer>
-
-// Maps a host byte buffer into a device buffer.
+// Imports a host byte buffer into a device visible buffer.
 // If try!=0 then returns null if the given memory type cannot be mapped.
 // Host-local+constant requests will always succeed.
-vm.import private @allocator.map.byte_buffer(
+vm.import private @allocator.import(
   %allocator : !vm.ref<!hal.allocator>,
   %try : i32,
+  %queue_affinity : i64,
   %memory_types : i32,
   %buffer_usage : i32,
   %source : !vm.buffer,
   %offset : i64,
   %length : i64
 ) -> !vm.ref<!hal.buffer>
+attributes {minimum_version = 1 : i32}
 
 //===----------------------------------------------------------------------===//
 // iree_hal_buffer_t
@@ -175,6 +175,15 @@ vm.import private @channel.create(
   %group : !vm.buffer,
   %rank : i32,
   %count : i32
+) -> !vm.ref<!hal.channel>
+attributes {nosideeffects}
+
+// Splits a collective communication channel.
+vm.import private @channel.split(
+  %channel : !vm.ref<!hal.channel>,
+  %color : i32,
+  %key : i32,
+  %flags : i32
 ) -> !vm.ref<!hal.channel>
 attributes {nosideeffects}
 
@@ -359,6 +368,34 @@ vm.import private @device.queue.dealloca(
   %wait_fence : !vm.ref<!hal.fence>,
   %signal_fence : !vm.ref<!hal.fence>,
   %buffer : !vm.ref<!hal.buffer>
+)
+
+// Reads a segment from a file into a device buffer.
+vm.import private @device.queue.read(
+  %device : !vm.ref<!hal.device>,
+  %queue_affinity : i64,
+  %wait_fence : !vm.ref<!hal.fence>,
+  %signal_fence : !vm.ref<!hal.fence>,
+  %source_file : !vm.ref<!hal.file>,
+  %source_offset : i64,
+  %target_buffer : !vm.ref<!hal.buffer>,
+  %target_offset : i64,
+  %length : i64,
+  %flags : i32
+)
+
+// Writes a segment from device buffer into a file.
+vm.import private @device.queue.write(
+  %device : !vm.ref<!hal.device>,
+  %queue_affinity : i64,
+  %wait_fence : !vm.ref<!hal.fence>,
+  %signal_fence : !vm.ref<!hal.fence>,
+  %source_buffer : !vm.ref<!hal.buffer>,
+  %source_offset : i64,
+  %target_file : !vm.ref<!hal.file>,
+  %target_offset : i64,
+  %length : i64,
+  %flags : i32
 )
 
 // Executes one or more command buffers on a device queue.

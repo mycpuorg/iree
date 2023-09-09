@@ -4,13 +4,14 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree/compiler/Codegen/PassDetail.h"
-#include "iree/compiler/Codegen/Passes.h"
+#include "iree/compiler/Codegen/LLVMCPU/PassDetail.h"
+#include "iree/compiler/Codegen/LLVMCPU/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
+#include "mlir/Dialect/SCF/Transforms/Patterns.h"
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -24,7 +25,8 @@ namespace {
 // stages.
 void collectLoopsToPeel(RewriterBase &rewriter, Operation *op,
                         SmallVectorImpl<scf::ForOp> &loopsToPeel) {
-  if (!iree_compiler::getLoweringConfig(op)) return;
+  if (!iree_compiler::getLoweringConfig(op))
+    return;
 
   int maxNumLoopsToPeel = TypeSwitch<Operation *, int>(op)
                               .Case<linalg::LinalgOp>([](auto linalgOp) {
@@ -37,7 +39,8 @@ void collectLoopsToPeel(RewriterBase &rewriter, Operation *op,
   for (int i = 0; i < maxNumLoopsToPeel; ++i) {
     op = op->getParentOfType<scf::ForOp>();
     auto loop = llvm::cast_or_null<scf::ForOp>(op);
-    if (!loop || iree_compiler::isTiledAndDistributedLoop(loop)) break;
+    if (!loop || iree_compiler::isTiledAndDistributedLoop(loop))
+      break;
     loopsToPeel.push_back(loop);
   }
 
@@ -45,7 +48,7 @@ void collectLoopsToPeel(RewriterBase &rewriter, Operation *op,
 }
 
 class LLVMCPUPeelPass : public LLVMCPUPeelBase<LLVMCPUPeelPass> {
- public:
+public:
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<tensor::TensorDialect, linalg::LinalgDialect,
                     scf::SCFDialect>();
@@ -77,7 +80,7 @@ void LLVMCPUPeelPass::runOnOperation() {
   RewritePatternSet patterns(context);
   linalg::populateLinalgTilingCanonicalizationPatterns(patterns);
   scf::populateSCFForLoopCanonicalizationPatterns(patterns);
-  memref::populateResolveRankedShapeTypeResultDimsPatterns(patterns);
+  memref::populateResolveRankedShapedTypeResultDimsPatterns(patterns);
   context->getLoadedDialect<tensor::TensorDialect>()
       ->getCanonicalizationPatterns(patterns);
   if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
@@ -85,10 +88,10 @@ void LLVMCPUPeelPass::runOnOperation() {
     return signalPassFailure();
   }
 }
-}  // namespace
+} // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createLLVMCPUPeelPass() {
   return std::make_unique<LLVMCPUPeelPass>();
 }
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace iree_compiler
+} // namespace mlir

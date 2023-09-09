@@ -14,6 +14,7 @@ iree_lit_test_suite(
   NAME
     lit
   SRCS
+    "annotate_op_ordinals.mlir"
     "block_patterns.mlir"
     "combine_initializers.mlir"
     "demote_f32_to_f16.mlir"
@@ -24,12 +25,14 @@ iree_lit_test_suite(
     "fuse_globals.mlir"
     "hoist_into_globals.mlir"
     "hoist_into_globals_linalg.mlir"
+    "import_resources.mlir"
     "ipo.mlir"
-    "promote_arith_bf16_to_f32.mlir"
+    "outline_constants.mlir"
     "promote_bf16_to_f32.mlir"
     "promote_f16_to_f32.mlir"
     "propagate_subranges.mlir"
     "simplify_global_accesses.mlir"
+    "strip_and_splat_constants.mlir"
     "strip_debug_ops.mlir"
     "test_float_range_analysis.mlir"
     "test_float_range_analysis_linalg.mlir"

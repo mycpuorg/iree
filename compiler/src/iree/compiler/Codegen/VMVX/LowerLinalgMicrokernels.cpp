@@ -6,8 +6,8 @@
 
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "iree/builtins/ukernel/exported_bits.h"
-#include "iree/compiler/Codegen/PassDetail.h"
-#include "iree/compiler/Codegen/Passes.h"
+#include "iree/compiler/Codegen/VMVX/PassDetail.h"
+#include "iree/compiler/Codegen/VMVX/Passes.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/VMVX/IR/VMVXDialect.h"
 #include "iree/compiler/Dialect/VMVX/IR/VMVXOps.h"
@@ -99,7 +99,7 @@ bool verifyMemRefInnerDimsContiguousRowMajor(MemRefType type) {
   }
 
   ArrayRef<int64_t> sizes = type.getShape();
-  assert(rank >= 2);  // Ensured by above early return.
+  assert(rank >= 2); // Ensured by above early return.
   if (strides[rank - 1] != 1) {
     return false;
   }
@@ -121,15 +121,14 @@ bool verifyMemRefInnerDimsContiguousRowMajor(MemRefType type) {
   return true;
 }
 
-struct StridedBufferDescriptor {
-  MemRefType memRefType;
-
+class StridedBufferDescriptor {
+public:
   // Size/offset/strides of the buffer.
   Value offset;
   SmallVector<Value> sizes;
   SmallVector<Value> strides;
 
-  StridedBufferDescriptor() = default;
+  StridedBufferDescriptor(MemRefType memRefType) : memRefType(memRefType) {}
 
   unsigned getRank() { return strides.size(); }
   Type getElementType() { return memRefType.getElementType(); }
@@ -145,12 +144,12 @@ struct StridedBufferDescriptor {
   /// with element-based addressing.
   Value castToLinear(Location loc, OpBuilder &builder) { return baseBuffer; }
 
- private:
+private:
   // The base !util.buffer
   Value baseBuffer;
   friend class StridedBufferAnalysis;
+  MemRefType memRefType;
 };
-
 /// Holds the results of an analysis which indicates whether a given memref
 /// can be decomposed into fully known static or dynamic base, strides, offset
 /// and sizes. If this holds, then a StridedBufferDescriptor is guaranteed to
@@ -160,14 +159,14 @@ struct StridedBufferDescriptor {
 /// SubviewOps to some memref with an identity layout (i.e. not offsets/strides
 /// applied).
 class StridedBufferAnalysis {
- public:
+public:
   StridedBufferAnalysis(Value buffer) : buffer(buffer) {}
 
   // Whether analysis was successful.
   bool isValid() { return true; }
 
   // Gets the type of the buffer being analyzed.
-  MemRefType getType() { return buffer.getType().cast<MemRefType>(); }
+  MemRefType getType() { return llvm::cast<MemRefType>(buffer.getType()); }
 
   // Gets the rank of the buffer being analyzed.
   unsigned getRank() { return getType().getRank(); }
@@ -180,14 +179,14 @@ class StridedBufferAnalysis {
 
   StridedBufferDescriptor &getDesc(OpBuilder &builder) {
     assert(isValid() && "invalid StridedBufferAnalysis");
-    if (desc) return *desc;
+    if (desc)
+      return *desc;
 
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointAfterValue(buffer);
 
     Location loc = buffer.getLoc();
-    desc = StridedBufferDescriptor();
-    desc->memRefType = buffer.getType().cast<MemRefType>();
+    desc = StridedBufferDescriptor(llvm::cast<MemRefType>(buffer.getType()));
 
     int rank = getType().getRank();
     SmallVector<Type> sizeStrideTypes;
@@ -208,7 +207,7 @@ class StridedBufferAnalysis {
     return *desc;
   }
 
- private:
+private:
   Value buffer;
   std::optional<StridedBufferDescriptor> desc;
 };
@@ -243,8 +242,7 @@ struct BinaryEmitter {
 
   BinaryEmitter(Descriptor operand0, Descriptor operand1, Descriptor result,
                 OpSelection selection)
-      : operands(std::make_pair(operand0, operand1)),
-        result(result),
+      : operands(std::make_pair(operand0, operand1)), result(result),
         selection(selection) {}
 
   bool isProjectedPermutation() {
@@ -261,7 +259,8 @@ struct BinaryEmitter {
   LogicalResult initialize(Location loc, PatternRewriter &rewriter) {
     if (!isProjectedPermutation())
       return rewriter.notifyMatchFailure(loc, "not projected permutation");
-    if (maxRank() > 2) return rewriter.notifyMatchFailure(loc, "rank > 2");
+    if (maxRank() > 2)
+      return rewriter.notifyMatchFailure(loc, "rank > 2");
     if (!operands.first.bufferAnal.isValid() ||
         !operands.second.bufferAnal.isValid() || !result.bufferAnal.isValid()) {
       return rewriter.notifyMatchFailure(loc,
@@ -308,26 +307,26 @@ struct BinaryEmitter {
     leftPadToRank(loc, params.sizes, 2, 1, rewriter);
 
     switch (selection.opType) {
-      case OpType::GenericBinary: {
-        rewriter.create<IREE::VMVX::BinaryOp>(
-            loc, rewriter.getStringAttr(selection.opcode),
-            // LHS
-            params.in0Buffer, operands.first.bufferDesc->offset,
-            params.in0Strides,
-            // RHS
-            params.in1Buffer, operands.second.bufferDesc->offset,
-            params.in1Strides,
-            // OUT
-            params.outBuffer, result.bufferDesc->offset, params.outStrides,
-            // Sizes
-            params.sizes,
-            // Attributes
-            operands.first.bufferDesc->getElementTypeAttr());
+    case OpType::GenericBinary: {
+      rewriter.create<IREE::VMVX::BinaryOp>(
+          loc, rewriter.getStringAttr(selection.opcode),
+          // LHS
+          params.in0Buffer, operands.first.bufferDesc->offset,
+          params.in0Strides,
+          // RHS
+          params.in1Buffer, operands.second.bufferDesc->offset,
+          params.in1Strides,
+          // OUT
+          params.outBuffer, result.bufferDesc->offset, params.outStrides,
+          // Sizes
+          params.sizes,
+          // Attributes
+          operands.first.bufferDesc->getElementTypeAttr());
 
-        break;
-      }
-      default:
-        assert(false && "unhandled OpType");
+      break;
+    }
+    default:
+      assert(false && "unhandled OpType");
     }
   }
 };
@@ -373,7 +372,8 @@ struct UnaryEmitter {
   LogicalResult initialize(Location loc, PatternRewriter &rewriter) {
     if (!isProjectedPermutation())
       return rewriter.notifyMatchFailure(loc, "not projected permutation");
-    if (maxRank() > 2) return rewriter.notifyMatchFailure(loc, "rank > 2");
+    if (maxRank() > 2)
+      return rewriter.notifyMatchFailure(loc, "rank > 2");
     if (!operand.bufferAnal.isValid() || !result.bufferAnal.isValid()) {
       return rewriter.notifyMatchFailure(loc,
                                          "could not compute buffer descriptor");
@@ -410,22 +410,22 @@ struct UnaryEmitter {
     leftPadToRank(loc, params.sizes, 2, 1, rewriter);
 
     switch (selection.opType) {
-      case OpType::GenericUnary: {
-        rewriter.create<IREE::VMVX::UnaryOp>(
-            loc, rewriter.getStringAttr(selection.opcode),
-            // IN
-            params.inBuffer, operand.bufferDesc->offset, params.inStrides,
-            // OUT
-            params.outBuffer, result.bufferDesc->offset, params.outStrides,
-            // Sizes
-            params.sizes,
-            // Attributes
-            operand.bufferDesc->getElementTypeAttr());
+    case OpType::GenericUnary: {
+      rewriter.create<IREE::VMVX::UnaryOp>(
+          loc, rewriter.getStringAttr(selection.opcode),
+          // IN
+          params.inBuffer, operand.bufferDesc->offset, params.inStrides,
+          // OUT
+          params.outBuffer, result.bufferDesc->offset, params.outStrides,
+          // Sizes
+          params.sizes,
+          // Attributes
+          operand.bufferDesc->getElementTypeAttr());
 
-        break;
-      }
-      default:
-        assert(false && "unhandled OpType");
+      break;
+    }
+    default:
+      assert(false && "unhandled OpType");
     }
   }
 };
@@ -465,7 +465,8 @@ struct CopyEmitter {
   LogicalResult initialize(Location loc, PatternRewriter &rewriter) {
     if (!isProjectedPermutation())
       return rewriter.notifyMatchFailure(loc, "not projected permutation");
-    if (maxRank() > 2) return rewriter.notifyMatchFailure(loc, "rank > 2");
+    if (maxRank() > 2)
+      return rewriter.notifyMatchFailure(loc, "rank > 2");
 
     // Initialize buffer descriptors.
     for (auto &copy : copies) {
@@ -529,9 +530,11 @@ struct LinalgBinaryGenericConversion
                                 PatternRewriter &rewriter) const override {
     auto &children = op.getBlock()->getOperations();
     // Only match two children (op + yield).
-    if (children.size() != 2) return failure();
+    if (children.size() != 2)
+      return failure();
     // Only match parallel loops.
-    if (op.getNumParallelLoops() != op.getNumLoops()) return failure();
+    if (op.getNumParallelLoops() != op.getNumLoops())
+      return failure();
 
     // Match:
     //   %0 = someop %arg2, %arg3
@@ -543,10 +546,11 @@ struct LinalgBinaryGenericConversion
       return failure();
     }
     BlockArgument operandScalar0 =
-        binaryOp->getOperands()[0].dyn_cast<BlockArgument>();
+        llvm::dyn_cast<BlockArgument>(binaryOp->getOperands()[0]);
     BlockArgument operandScalar1 =
-        binaryOp->getOperands()[1].dyn_cast<BlockArgument>();
-    if (!operandScalar0 || !operandScalar1) return failure();
+        llvm::dyn_cast<BlockArgument>(binaryOp->getOperands()[1]);
+    if (!operandScalar0 || !operandScalar1)
+      return failure();
 
     // Construct the emitter and start lowering.
     // Note that the operands may map to an out if the aliasing is safe,
@@ -594,7 +598,8 @@ struct LinalgBinaryGenericConversion
     // Select the op to lower to and configure the emitter.
     // Emit from the iree_ukernel_x32b_opcode_t table.
     Type resultType = binaryOp->getResult(0).getType();
-    if (!resultType.isIntOrFloat()) return failure();
+    if (!resultType.isIntOrFloat())
+      return failure();
     std::optional<BinaryEmitter> emitter =
         TypeSwitch<Operation *, std::optional<BinaryEmitter>>(binaryOp)
             .Case([&](arith::AddFOp op) -> std::optional<BinaryEmitter> {
@@ -687,7 +692,8 @@ struct LinalgBinaryGenericConversion
     if (!emitter) {
       return rewriter.notifyMatchFailure(op, "unrecognized binary op");
     }
-    if (failed(emitter->initialize(op.getLoc(), rewriter))) return failure();
+    if (failed(emitter->initialize(op.getLoc(), rewriter)))
+      return failure();
 
     emitter->emit(op.getLoc(), rewriter);
     rewriter.eraseOp(op);
@@ -704,9 +710,11 @@ struct LinalgUnaryGenericConversion
                                 PatternRewriter &rewriter) const override {
     auto &children = op.getBlock()->getOperations();
     // Only match two children (op + yield).
-    if (children.size() != 2) return failure();
+    if (children.size() != 2)
+      return failure();
     // Only match parallel loops.
-    if (op.getNumParallelLoops() != op.getNumLoops()) return failure();
+    if (op.getNumParallelLoops() != op.getNumLoops())
+      return failure();
 
     // Match:
     //   %0 = someop %arg2
@@ -718,8 +726,9 @@ struct LinalgUnaryGenericConversion
       return failure();
     }
     BlockArgument operandScalar0 =
-        unaryOp->getOperands()[0].dyn_cast<BlockArgument>();
-    if (!operandScalar0) return failure();
+        llvm::dyn_cast<BlockArgument>(unaryOp->getOperands()[0]);
+    if (!operandScalar0)
+      return failure();
 
     // Construct the emitter and start lowering.
     // Note that the operands may map to an out if the aliasing is safe,
@@ -747,7 +756,8 @@ struct LinalgUnaryGenericConversion
     // Select the op to lower to and configure the emitter.
     // Emit from the iree_ukernel_x32b_opcode_t table.
     Type resultType = unaryOp->getResult(0).getType();
-    if (!resultType.isIntOrFloat()) return failure();
+    if (!resultType.isIntOrFloat())
+      return failure();
     std::optional<UnaryEmitter> emitter =
         TypeSwitch<Operation *, std::optional<UnaryEmitter>>(unaryOp)
             .Case([&](math::AbsFOp op) -> std::optional<UnaryEmitter> {
@@ -805,7 +815,8 @@ struct LinalgUnaryGenericConversion
     if (!emitter) {
       return rewriter.notifyMatchFailure(op, "unrecognized unary op");
     }
-    if (failed(emitter->initialize(op.getLoc(), rewriter))) return failure();
+    if (failed(emitter->initialize(op.getLoc(), rewriter)))
+      return failure();
 
     emitter->emit(op.getLoc(), rewriter);
     rewriter.eraseOp(op);
@@ -822,16 +833,18 @@ struct LinalgTrivialGenericConversion
                                 PatternRewriter &rewriter) const override {
     auto &children = op.getBlock()->getOperations();
     // Only match one child (yield).
-    if (children.size() != 1) return failure();
+    if (children.size() != 1)
+      return failure();
     // Only match parallel loops.
-    if (op.getNumParallelLoops() != op.getNumLoops()) return failure();
+    if (op.getNumParallelLoops() != op.getNumLoops())
+      return failure();
 
     // Presumed to be a yield terminator: configure the emitter.
     CopyEmitter emitter;
     Operation &yieldOp = children.front();
     for (auto [outputIndex, yieldOperand] :
          llvm::enumerate(yieldOp.getOperands())) {
-      if (auto blockArg = yieldOperand.dyn_cast<BlockArgument>()) {
+      if (auto blockArg = llvm::dyn_cast<BlockArgument>(yieldOperand)) {
         unsigned inputIndex = blockArg.getArgNumber();
         OpOperand *input = op.getDpsInputOperand(inputIndex);
         OpOperand *output = op.getDpsInitOperand(outputIndex);
@@ -845,7 +858,8 @@ struct LinalgTrivialGenericConversion
       }
     }
 
-    if (failed(emitter.initialize(op.getLoc(), rewriter))) return failure();
+    if (failed(emitter.initialize(op.getLoc(), rewriter)))
+      return failure();
     emitter.emit(op.getLoc(), rewriter);
     rewriter.eraseOp(op);
     return success();
@@ -884,6 +898,12 @@ struct LinalgFillConversion : public OpRewritePattern<linalg::FillOp> {
   }
 
   LogicalResult handle2DTile(OpInfo &info, PatternRewriter &rewriter) const {
+    Type scalarType = info.scalar.getType();
+    if (!scalarType.isIntOrFloat() ||
+        scalarType.getIntOrFloatBitWidth() != 32) {
+      return rewriter.notifyMatchFailure(info.op,
+                                         "handling only 32-bit scalar types");
+    }
     auto loc = info.op.getLoc();
     StridedBufferDescriptor &outDesc = info.outAnal.getDesc(rewriter);
     Value m = outDesc.sizes[0];
@@ -897,7 +917,7 @@ struct LinalgFillConversion : public OpRewritePattern<linalg::FillOp> {
   }
 };
 
-}  // namespace
+} // namespace
 
 class VMVXLowerLinalgMicrokernelsPass
     : public VMVXLowerLinalgMicrokernelsBase<VMVXLowerLinalgMicrokernelsPass> {
@@ -935,5 +955,5 @@ std::unique_ptr<Pass> createVMVXLowerLinalgMicrokernelsPass() {
   return std::make_unique<VMVXLowerLinalgMicrokernelsPass>();
 }
 
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace iree_compiler
+} // namespace mlir

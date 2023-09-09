@@ -10,11 +10,18 @@
 #include "iree/builtins/ukernel/mmt4d.h"
 
 typedef enum iree_uk_mmt4d_type_t {
-  iree_uk_mmt4d_type_none = 0,
   iree_uk_mmt4d_type_f32f32f32 =
       IREE_UK_TIE_3_TYPES_LITERAL(FLOAT_32, FLOAT_32, FLOAT_32),
   iree_uk_mmt4d_type_i8i8i32 =
       IREE_UK_TIE_3_TYPES_LITERAL(INT_8, INT_8, INT_32),
+  iree_uk_mmt4d_type_f16f16f32 =
+      IREE_UK_TIE_3_TYPES_LITERAL(FLOAT_16, FLOAT_16, FLOAT_32),
+  iree_uk_mmt4d_type_f16f16f16 =
+      IREE_UK_TIE_3_TYPES_LITERAL(FLOAT_16, FLOAT_16, FLOAT_16),
+  iree_uk_mmt4d_type_bf16bf16f32 =
+      IREE_UK_TIE_3_TYPES_LITERAL(BFLOAT_16, BFLOAT_16, FLOAT_32),
+  iree_uk_mmt4d_type_bf16bf16bf16 =
+      IREE_UK_TIE_3_TYPES_LITERAL(BFLOAT_16, BFLOAT_16, BFLOAT_16),
 } iree_uk_mmt4d_type_t;
 
 static inline iree_uk_mmt4d_type_t iree_uk_mmt4d_type(iree_uk_uint32_t flags) {
@@ -23,8 +30,25 @@ static inline iree_uk_mmt4d_type_t iree_uk_mmt4d_type(iree_uk_uint32_t flags) {
       return iree_uk_mmt4d_type_f32f32f32;
     case IREE_UK_FLAG_MMT4D_TYPE_I8I8I32:
       return iree_uk_mmt4d_type_i8i8i32;
+    case IREE_UK_FLAG_MMT4D_TYPE_F16F16F32:
+      return iree_uk_mmt4d_type_f16f16f32;
+    case IREE_UK_FLAG_MMT4D_TYPE_F16F16F16:
+      return iree_uk_mmt4d_type_f16f16f16;
+    case IREE_UK_FLAG_MMT4D_TYPE_BF16BF16F32:
+      return iree_uk_mmt4d_type_bf16bf16f32;
+    case IREE_UK_FLAG_MMT4D_TYPE_BF16BF16BF16:
+      return iree_uk_mmt4d_type_bf16bf16bf16;
     default:
-      return iree_uk_mmt4d_type_none;
+      // This unreachable statement is not just an optimization, it also works
+      // around a LLVM/riscv32 miscompile.
+
+      // When we used to have a iree_uk_mmt4d_type_none value equal to 0 and
+      // were returning it here, that caused this whole switch statement to be
+      // miscompiled by LLVM/riscv32 as if it were UB. That value was passed to
+      // `iree_uk_type_bit_count(x)`, which evaluates to `1<<(x - 3)`, which is
+      // UB if x<3. So it was fair to treat that default: clause as UB, but
+      // LLVM/riscv32 was incorrectly treating the whole switch as UB.
+      IREE_UK_ASSUME_UNREACHABLE;
   }
 }
 
@@ -45,24 +69,17 @@ static inline iree_uk_type_t iree_uk_mmt4d_out_type(iree_uk_mmt4d_type_t type) {
 // the inner-most loop of the matmul, i.e. the thing that we should actually
 // be calling "micro kernel" except that the name is already taken by the
 // higher-level builtin name.
-//
-// The 'params' argument is only used by generic kernels. Actual optimized
-// kernels are already specialized for a given tile shape (M0xN0xK0), so the
-// five first arguments here are the only information that they need. Not having
-// to address 'params' struct fields in the middle of assembly kernels is
-// good, because it's hard to get the struct field offsets right in assembly
-// and keep that in sync with future struct changes.
 typedef void (*iree_uk_mmt4d_tile_func_t)(
     void* IREE_UK_RESTRICT out_tile, const void* IREE_UK_RESTRICT lhs_panel,
-    const void* IREE_UK_RESTRICT rhs_panel, iree_uk_int32_t K,
-    iree_uk_uint32_t flags, const iree_uk_mmt4d_params_t* params);
+    const void* IREE_UK_RESTRICT rhs_panel,
+    const iree_uk_mmt4d_params_t* params);
 
 // Tile kernel declarations. Prototype matches iree_uk_mmt4d_tile_func_t.
-#define IREE_UK_MMT4D_TILE_FUNC_DECL(NAME)                             \
-  void NAME(void* IREE_UK_RESTRICT out_tile,                           \
-            const void* IREE_UK_RESTRICT lhs_panel,                    \
-            const void* IREE_UK_RESTRICT rhs_panel, iree_uk_int32_t K, \
-            iree_uk_uint32_t flags, const iree_uk_mmt4d_params_t* params);
+#define IREE_UK_MMT4D_TILE_FUNC_DECL(NAME)          \
+  void NAME(void* IREE_UK_RESTRICT out_tile,        \
+            const void* IREE_UK_RESTRICT lhs_panel, \
+            const void* IREE_UK_RESTRICT rhs_panel, \
+            const iree_uk_mmt4d_params_t* params);
 
 // In order to be helpful as a reference for future architecture-specific
 // kernels, the generic kernels are structured like an actual optimized kernel,
@@ -84,6 +101,10 @@ enum { iree_uk_mmt4d_tile_generic_max_bytes = 4096 };
 
 // Returns the tile function to use for the mmt4d op with the given params.
 iree_uk_mmt4d_tile_func_t iree_uk_mmt4d_select_tile_func(
+    const iree_uk_mmt4d_params_t* params);
+
+// Architecture-specific implementation.
+iree_uk_mmt4d_tile_func_t iree_uk_mmt4d_select_tile_func_arch(
     const iree_uk_mmt4d_params_t* params);
 
 #endif  // IREE_BUILTINS_UKERNEL_MMT4D_INTERNAL_H_

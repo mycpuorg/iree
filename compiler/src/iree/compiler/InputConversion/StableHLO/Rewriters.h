@@ -21,6 +21,11 @@ void populateStableHloToLinalgConversionPatterns(MLIRContext *context,
                                                  RewritePatternSet *patterns,
                                                  bool enablePrimitiveOps);
 
+/// Collection of rewrite patterns for lowering of CHLO ops to StableHLO and
+/// Shape ops.
+void populateLegalizeChloPatterns(MLIRContext *context,
+                                  RewritePatternSet *patterns);
+
 /// Collection of rewrite patterns for lowering of StableHLO ops to SCF control
 /// flow ops.
 void populateLegalizeControlFlowPatterns(MLIRContext *context,
@@ -34,8 +39,20 @@ void populateLegalizeShapeComputationPatterns(MLIRContext *context,
 // IREE-specific patterns.
 //===----------------------------------------------------------------------===//
 
-/// Populates the patterns that convert from StableHLO to Linalg on tensors.
+/// Populates the patterns that convert from StableHLO to LinalgExt.
 void populateStableHloToLinalgExtConversionPatterns(
+    MLIRContext *context, TypeConverter &typeConverter,
+    RewritePatternSet *patterns);
+
+/// Populates the patterns that convert from StableHLO to Linalg on tensors.
+/// Extends the general linalg lowering patterns with IREE-specific ones.
+void populateStableHloToLinalgOnTensorsConversionPatterns(
+    MLIRContext *context, TypeConverter &typeConverter,
+    RewritePatternSet *patterns);
+
+/// Populates the patterns that convert from StableHLO collective ops to Flow
+/// ops.
+void populateStableHloCollectivesConversionPatterns(
     MLIRContext *context, TypeConverter &typeConverter,
     RewritePatternSet *patterns);
 
@@ -78,8 +95,8 @@ void populateScalarHloToArithConversionPatterns(
     MLIRContext *context, TypeConverter &typeConverter,
     RewritePatternSet *patterns,
     llvm::function_ref<bool(Operation *)> filterFn = nullptr);
-}  // namespace detail
+} // namespace detail
 
-}  // namespace mlir::iree_compiler::stablehlo
+} // namespace mlir::iree_compiler::stablehlo
 
-#endif  // IREE_COMPILER_INPUTCONVERSION_STABLEHLO_REWRITERS_H_
+#endif // IREE_COMPILER_INPUTCONVERSION_STABLEHLO_REWRITERS_H_

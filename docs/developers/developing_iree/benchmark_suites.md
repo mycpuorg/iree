@@ -1,19 +1,13 @@
 # IREE Benchmark Suites
 
-**We are in the progress of replacing the legacy benchmark suites. Currently the
-new benchmark suites only support `x86_64`, `CUDA`, and `compilation statistics`
-benchmarks. For working with the legacy benchmark suites, see
-[IREE Benchmarks (Legacy)](/benchmarks/README.md)**.
-
 IREE Benchmarks Suites is a collection of benchmarks for IREE developers to
 track performance improvements/regressions during development.
 
 The benchmark suites are run for each commit on the main branch and the results
 are uploaded to https://perf.iree.dev for regression analysis (for the current
-supported targets). On pull requests, users can write `benchmarks:
-x86_64,cuda,comp-stats` (or a subset) at the bottom of the PR descriptions and
-re-run the CI workflow to trigger the benchmark runs. The results will be
-compared with https://perf.iree.dev and post in the comments.
+supported targets). On pull requests, users can add labels `benchmarks:*` to
+trigger the benchmark runs. The results will be compared with
+https://perf.iree.dev and post in the comments.
 
 Information about the definitions of the benchmark suites can be found in the
 [IREE Benchmark Suites Configurations](/build_tools/python/benchmark_suites/iree/README.md).
@@ -24,9 +18,43 @@ Information about the definitions of the benchmark suites can be found in the
 
 Install `iree-import-tf` and `iree-import-tflite` in your Python environment
 (see
-[Tensorflow Integration](https://openxla.github.io/iree/getting-started/tensorflow/)
+[Tensorflow Integration](https://openxla.github.io/iree/guides/ml-frameworks/tensorflow/)
 and
-[TFLite Integration](https://openxla.github.io/iree/getting-started/tflite/)).
+[TFLite Integration](https://openxla.github.io/iree/guides/ml-frameworks/tflite/)).
+
+### Choose Benchmark Presets
+
+IREE Benchmark Suites contain many benchmarks for different devices and model
+sizes, which can take lots of space and time to build all of them. So benchmarks
+are grouped into presets to allow building and running only a subset of them.
+The available presets are:
+
+Execution benchmarks:
+
+-   `android-cpu`: benchmarks for mobile CPUs
+-   `android-gpu`: benchmarks for mobile GPUs
+-   `cuda`: benchmarks for CUDA with a small model set
+-   `cuda-large`: benchmarks for CUDA with a large model set
+-   `vulkan-nvidia`: benchmarks for Vulkan on NVIDIA graphics cards
+-   `x86_64`: benchmarks for x86_64 CPUs with a small model set
+-   `x86_64-large`: benchmarks for x86_64 with a large model set
+
+Compilation benchmarks (to collect compilation statistics, such as module
+sizes):
+
+-   `comp-stats`: compilation benchmarks with a small model set
+-   `comp-stats-large`: compilation benchmark with a large model set
+
+Note that `*-large` presets will download and build a few hundreds GBs of
+artifacts.
+
+Set the environment variables of benchmark presets for the steps below, for
+example:
+
+```sh
+export EXECUTION_BENCHMARK_PRESETS="cuda,x86_64"
+export COMPILATION_BENCHMARK_PRESETS="comp-stats"
+```
 
 ### Build Benchmark Suites
 
@@ -41,21 +69,37 @@ cmake -GNinja -B "${IREE_BUILD_DIR?}" -S "${IREE_REPO?}" \
   -DIREE_BUILD_E2E_TEST_ARTIFACTS=ON
 ```
 
-Build the benchmark suites and tools:
+If you only need the imported MLIR models:
 
 ```sh
 cmake --build "${IREE_BUILD_DIR?}" --target \
-  iree-e2e-test-artifacts \
+  iree-benchmark-import-models
+  # For large benchmarks (this will take > 100G disk space)
+  # iree-benchmark-import-models-large
+```
+
+Otherwise, compile the benchmark suites and tools for benchmarking:
+
+```sh
+cmake --build "${IREE_BUILD_DIR?}" --target \
+  iree-benchmark-suites \
+  # If any *-large preset is enabled, also build this target:
+  # iree-benchmark-suites-large \
   iree-benchmark-module
 export E2E_TEST_ARTIFACTS_DIR="${IREE_BUILD_DIR?}/e2e_test_artifacts"
 ```
+
+> TODO(#13683): Each preset should have its own target to further reduce
+> unnecessary builds
 
 ### Run Benchmarks
 
 Export the execution benchmark config:
 
 ```sh
-build_tools/benchmarks/export_benchmark_config.py execution > "${E2E_TEST_ARTIFACTS_DIR?}/exec_config.json"
+build_tools/benchmarks/export_benchmark_config.py execution \
+  --benchmark_presets="${EXECUTION_BENCHMARK_PRESETS?}" \
+  > "${E2E_TEST_ARTIFACTS_DIR?}/exec_config.json"
 ```
 
 Run benchmarks (currently only support running on a Linux host):
@@ -109,14 +153,15 @@ build_tools/benchmarks/run_benchmarks_on_linux.py \
 Export the compilation benchmark config:
 
 ```sh
-build_tools/benchmarks/export_benchmark_config.py compilation > "${E2E_TEST_ARTIFACTS_DIR?}/comp_config.json"
+build_tools/benchmarks/export_benchmark_config.py compilation \
+  --benchmark_presets="${COMPILATION_BENCHMARK_PRESETS?}" \
+  > "${E2E_TEST_ARTIFACTS_DIR?}/comp_config.json"
 ```
 
 Generate the compilation statistics:
 
 ```sh
 build_tools/benchmarks/collect_compilation_statistics.py \
-  alpha \
   --compilation_benchmark_config=comp_config.json \
   --e2e_test_artifacts_dir="${E2E_TEST_ARTIFACTS_DIR?}" \
   --build_log="${IREE_BUILD_DIR?}/.ninja_log" \
@@ -128,8 +173,25 @@ benchmark suites as the tool collects information from its build log.
 
 ### Show Execution / Compilation Benchmark Results
 
-See
-[Generating Benchmark Report](/build_tools/benchmarks/README.md#generating-benchmark-report).
+If you want to generate a comparison report locally, you can use
+[diff_local_benchmarks.py](/build_tools/benchmarks/diff_local_benchmarks.py)
+script to compare two result json files and generate the report. For example:
+
+```sh
+build_tools/benchmarks/diff_local_benchmarks.py \
+  --base "${E2E_TEST_ARTIFACTS_DIR?}/before_benchmark_results.json" \
+  --target "${E2E_TEST_ARTIFACTS_DIR?}/after_benchmark_results.json" \
+  > report.md
+```
+
+An example that compares compilation statistics:
+
+```sh
+build_tools/benchmarks/diff_local_benchmarks.py \
+  --base-compile-stats "${E2E_TEST_ARTIFACTS_DIR?}/before_compile_stats_results.json" \
+  --target-compile-stats "${E2E_TEST_ARTIFACTS_DIR?}/after_compile_stats_results.json" \
+  > report.md
+```
 
 ### Find Compile and Run Commands to Reproduce Benchmarks
 
@@ -242,6 +304,9 @@ Benchmark raw results and traces can be downloaded at:
 ```sh
 # Execution benchmark raw results
 gcloud storage cp "${EXECUTION_BENCHMARK_RESULTS_DIR_URL?}/benchmark-results-*.json" .
+
+# Optional: Merge raw results into a single file
+build_tools/benchmarks/benchmark_helper.py merge-results benchmark-results-*.json > benchmark_results.json
 
 # Execution benchmark traces
 gcloud storage cp "${EXECUTION_BENCHMARK_RESULTS_DIR_URL?}/benchmark-traces-*.tar.gz" .

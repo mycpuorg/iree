@@ -14,21 +14,27 @@ namespace HAL {
 // TODO(benvanik): add other platforms:
 // createMacLinkerTool using ld64.lld
 
-std::unique_ptr<LinkerTool> createAndroidLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions);
-std::unique_ptr<LinkerTool> createEmbeddedLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions);
-std::unique_ptr<LinkerTool> createUnixLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions);
-std::unique_ptr<LinkerTool> createWasmLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions);
-std::unique_ptr<LinkerTool> createWindowsLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions);
+std::unique_ptr<LinkerTool>
+createAndroidLinkerTool(const llvm::Triple &targetTriple,
+                        LLVMTargetOptions &targetOptions);
+std::unique_ptr<LinkerTool>
+createEmbeddedLinkerTool(const llvm::Triple &targetTriple,
+                         LLVMTargetOptions &targetOptions);
+std::unique_ptr<LinkerTool>
+createUnixLinkerTool(const llvm::Triple &targetTriple,
+                     LLVMTargetOptions &targetOptions);
+std::unique_ptr<LinkerTool>
+createWasmLinkerTool(const llvm::Triple &targetTriple,
+                     LLVMTargetOptions &targetOptions);
+std::unique_ptr<LinkerTool>
+createWindowsLinkerTool(const llvm::Triple &targetTriple,
+                        LLVMTargetOptions &targetOptions);
 
 // static
-std::unique_ptr<LinkerTool> LinkerTool::getForTarget(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions) {
-  if (targetOptions.linkEmbedded) {
+std::unique_ptr<LinkerTool>
+LinkerTool::getForTarget(const llvm::Triple &targetTriple,
+                         LLVMTargetOptions &targetOptions) {
+  if (targetOptions.target.getLinkEmbedded()) {
     return createEmbeddedLinkerTool(targetTriple, targetOptions);
   } else if (targetTriple.isAndroid()) {
     return createAndroidLinkerTool(targetTriple, targetOptions);
@@ -41,7 +47,7 @@ std::unique_ptr<LinkerTool> LinkerTool::getForTarget(
   return createUnixLinkerTool(targetTriple, targetOptions);
 }
 
-}  // namespace HAL
-}  // namespace IREE
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace HAL
+} // namespace IREE
+} // namespace iree_compiler
+} // namespace mlir

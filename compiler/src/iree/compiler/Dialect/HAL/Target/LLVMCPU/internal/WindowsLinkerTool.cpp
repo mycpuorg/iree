@@ -6,6 +6,7 @@
 
 #include "iree/compiler/Dialect/HAL/Target/LLVMCPU/LinkerTool.h"
 #include "iree/compiler/Utils/ToolUtils.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -19,26 +20,28 @@ namespace HAL {
 
 // Windows linker (MSVC link.exe-like); for DLL files.
 class WindowsLinkerTool : public LinkerTool {
- public:
+public:
   using LinkerTool::LinkerTool;
 
   std::string getSystemToolPath() const override {
     // First check for setting the linker explicitly.
     auto toolPath = LinkerTool::getSystemToolPath();
-    if (!toolPath.empty()) return toolPath;
+    if (!toolPath.empty())
+      return toolPath;
 
     // No explicit linker specified, search the executable directory (i.e. our
     // own build or install directories) for common tools.
     toolPath = findToolFromExecutableDir({"lld-link"});
-    if (!toolPath.empty()) return toolPath;
+    if (!toolPath.empty())
+      return toolPath;
 
     llvm::errs() << "No Windows linker tool specified or discovered\n";
     return "";
   }
 
-  LogicalResult configureModule(
-      llvm::Module *llvmModule,
-      ArrayRef<llvm::Function *> exportedFuncs) override {
+  LogicalResult
+  configureModule(llvm::Module *llvmModule,
+                  ArrayRef<llvm::Function *> exportedFuncs) override {
     auto &ctx = llvmModule->getContext();
 
     // Create a _DllMainCRTStartup replacement that does not initialize the CRT.
@@ -72,7 +75,7 @@ class WindowsLinkerTool : public LinkerTool {
     // the downside of making some tooling (disassemblers/decompilers/binary
     // size analysis tools/etc) a bit harder to work with, though, so when
     // compiling in debug mode we export all the functions.
-    if (targetOptions.debugSymbols) {
+    if (targetOptions.target.debugSymbols) {
       for (auto *llvmFunc : exportedFuncs) {
         llvmFunc->setVisibility(
             llvm::GlobalValue::VisibilityTypes::DefaultVisibility);
@@ -90,8 +93,9 @@ class WindowsLinkerTool : public LinkerTool {
     return success();
   }
 
-  std::optional<Artifacts> linkDynamicLibrary(
-      StringRef libraryName, ArrayRef<Artifact> objectFiles) override {
+  std::optional<Artifacts>
+  linkDynamicLibrary(StringRef libraryName,
+                     ArrayRef<Artifact> objectFiles) override {
     Artifacts artifacts;
 
     // Create the shared object name; if we only have a single input object we
@@ -176,8 +180,8 @@ class WindowsLinkerTool : public LinkerTool {
         "/out:" + artifacts.libraryFile.path,
     };
 
-    if (targetOptions.optimizerOptLevel.getSpeedupLevel() >= 2 ||
-        targetOptions.optimizerOptLevel.getSizeLevel() >= 2) {
+    if (targetOptions.target.optimizerOptLevel.getSpeedupLevel() >= 2 ||
+        targetOptions.target.optimizerOptLevel.getSizeLevel() >= 2) {
       // https://docs.microsoft.com/en-us/cpp/build/reference/opt-optimizations?view=vs-2019
       // Enable all the fancy optimizations.
       flags.push_back("/opt:ref,icf,lbr");
@@ -231,12 +235,12 @@ class WindowsLinkerTool : public LinkerTool {
     // We need to link against different libraries based on our configuration
     // matrix (dynamic/static and debug/release).
     int libIndex = 0;
-    if (targetOptions.optimizerOptLevel.getSpeedupLevel() == 0) {
-      libIndex += 0;  // debug
+    if (targetOptions.target.optimizerOptLevel.getSpeedupLevel() == 0) {
+      libIndex += 0; // debug
     } else {
-      libIndex += 2;  // release
+      libIndex += 2; // release
     }
-    libIndex += targetOptions.linkStatic ? 1 : 0;
+    libIndex += targetOptions.target.linkStatic ? 1 : 0;
 
     // The required libraries for linking DLLs:
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/crt-library-features?view=msvc-160
@@ -272,7 +276,8 @@ class WindowsLinkerTool : public LinkerTool {
     }
 
     auto commandLine = llvm::join(flags, " ");
-    if (failed(runLinkCommand(commandLine))) return std::nullopt;
+    if (failed(runLinkCommand(commandLine)))
+      return std::nullopt;
 
     // PDB file gets generated wtih the same path + .pdb.
     artifacts.debugFile =
@@ -289,12 +294,13 @@ class WindowsLinkerTool : public LinkerTool {
   }
 };
 
-std::unique_ptr<LinkerTool> createWindowsLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions) {
+std::unique_ptr<LinkerTool>
+createWindowsLinkerTool(const llvm::Triple &targetTriple,
+                        LLVMTargetOptions &targetOptions) {
   return std::make_unique<WindowsLinkerTool>(targetTriple, targetOptions);
 }
 
-}  // namespace HAL
-}  // namespace IREE
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace HAL
+} // namespace IREE
+} // namespace iree_compiler
+} // namespace mlir

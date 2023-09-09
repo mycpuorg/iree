@@ -1,3 +1,11 @@
+---
+hide:
+  - tags
+tags:
+  - iOS
+icon: simple/apple
+---
+
 # iOS cross-compilation
 
 Cross-compilation for iOS consists of the two steps below.

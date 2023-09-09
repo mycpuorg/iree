@@ -140,8 +140,9 @@ static iree_status_t iree_replay_benchmark_run_documents(
     // loading we can do that now before processing subsequent events.
     if (iree_status_is_ok(status) && !have_parsed_inputs && replay->device) {
       status = iree_tooling_parse_into_variant_list(
-          iree_hal_device_allocator(replay->device), FLAG_input_list().values,
-          FLAG_input_list().count, replay->host_allocator, replay->inputs);
+          replay->device, iree_hal_device_allocator(replay->device),
+          FLAG_input_list().values, FLAG_input_list().count,
+          replay->host_allocator, replay->inputs);
       have_parsed_inputs = true;
     }
 
@@ -257,6 +258,8 @@ static void iree_replay_benchmark_register_trace_files(
 }
 
 int main(int argc, char** argv) {
+  IREE_TRACE_APP_ENTER();
+
   iree_allocator_t host_allocator = iree_allocator_system();
 
   // Pass through flags to benchmark (allowing --help to fall through).
@@ -267,7 +270,8 @@ int main(int argc, char** argv) {
   if (argc <= 1) {
     fprintf(stderr,
             "no trace files provided; pass one or more yaml file paths");
-    return 1;
+    IREE_TRACE_APP_EXIT(EXIT_FAILURE);
+    return EXIT_FAILURE;
   }
 
   // Used when tracing to display benchmark state.
@@ -302,5 +306,6 @@ int main(int argc, char** argv) {
 
   iree_file_contents_free(stdin_contents);
   iree_vm_instance_release(instance);
-  return 0;
+  IREE_TRACE_APP_EXIT(EXIT_SUCCESS);
+  return EXIT_SUCCESS;
 }

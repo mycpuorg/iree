@@ -18,7 +18,7 @@
 namespace mlir::iree_compiler::stablehlo {
 namespace {
 class ArithOpBuilder {
- public:
+public:
   ArithOpBuilder(OpBuilder b, Location l, Value v)
       : builder(b), loc(l), value(v) {}
 
@@ -38,7 +38,8 @@ class ArithOpBuilder {
   }
 
   ArithOpBuilder truncI(int64_t bits) {
-    if (value.getType().getIntOrFloatBitWidth() == bits) return *this;
+    if (value.getType().getIntOrFloatBitWidth() == bits)
+      return *this;
     Value trunc = builder.create<arith::TruncIOp>(
         loc, builder.getIntegerType(bits), value);
     return ArithOpBuilder(builder, loc, trunc);
@@ -75,6 +76,11 @@ class ArithOpBuilder {
     return ArithOpBuilder(builder, loc, res);
   }
 
+  ArithOpBuilder operator*(ArithOpBuilder &rhs) {
+    Value res = builder.create<arith::MulIOp>(loc, value, rhs.value);
+    return ArithOpBuilder(builder, loc, res);
+  }
+
   ArithOpBuilder operator|(ArithOpBuilder &rhs) {
     Value res = builder.create<arith::OrIOp>(loc, value, rhs.value);
     return ArithOpBuilder(builder, loc, res);
@@ -95,7 +101,7 @@ class ArithOpBuilder {
     return ArithOpBuilder(builder, loc, shr);
   }
 
- private:
+private:
   OpBuilder builder;
   Location loc;
   Value value;
@@ -118,8 +124,9 @@ ArithOpBuilder fuseI32s(ArithOpBuilder low, ArithOpBuilder high) {
 // Implements the ThreeFry counter-based PRNG algorithm.
 // Salmon et al. SC 2011. Parallel random numbers: as easy as 1, 2, 3.
 // http://www.thesalmons.org/john/random123/papers/random123sc11.pdf
-std::pair<ArithOpBuilder, ArithOpBuilder> runThreeFry2xi32(
-    ArithOpBuilder key0, ArithOpBuilder key1, ArithOpBuilder initialState) {
+std::pair<ArithOpBuilder, ArithOpBuilder>
+runThreeFry2xi32(ArithOpBuilder key0, ArithOpBuilder key1,
+                 ArithOpBuilder initialState) {
   ArithOpBuilder index = initialState.linalgIndex(0);
   index = index.indexCast(64);
   index = index + initialState;
@@ -164,7 +171,8 @@ std::pair<ArithOpBuilder, ArithOpBuilder> runThreeFry2xi32(
 std::pair<Value, Value> extractKey32(OpBuilder &builder, Location loc,
                                      Value store) {
   auto storeTy = cast<ShapedType>(store.getType());
-  if (storeTy.getRank() != 1) return {nullptr, nullptr};
+  if (storeTy.getRank() != 1)
+    return {nullptr, nullptr};
 
   Type storeETy = storeTy.getElementType();
   IntegerType i32Ty = builder.getIntegerType(32);
@@ -188,18 +196,36 @@ std::pair<Value, Value> extractKey32(OpBuilder &builder, Location loc,
     return std::pair<Value, Value>(pair.first, pair.second);
   }
 
+  // TODO(#14859): Properly handle 128-bit storage keys.
+  if (storeTy.getDimSize(0) == 3 && storeETy.isInteger(64)) {
+    Value idx1 = builder.create<arith::ConstantIndexOp>(loc, 0);
+    Value state = builder.create<tensor::ExtractOp>(loc, store, idx1);
+    Value cast = builder.create<arith::BitcastOp>(loc, i64Ty, state);
+    auto pair = splitI64(ArithOpBuilder(builder, loc, cast));
+    return std::pair<Value, Value>(pair.first, pair.second);
+  }
+
   return {nullptr, nullptr};
 }
 
 // Extract and potentially reconstruct the i64 state as necessary.
 Value extractState64(OpBuilder &builder, Location loc, Value store) {
   auto storeTy = cast<ShapedType>(store.getType());
-  if (storeTy.getRank() != 1) return nullptr;
+  if (storeTy.getRank() != 1)
+    return nullptr;
 
   Type storeETy = storeTy.getElementType();
   IntegerType i64Ty = builder.getIntegerType(64);
 
   if (storeTy.getDimSize(0) == 2 && storeETy.isInteger(64)) {
+    Value idx1 = builder.create<arith::ConstantIndexOp>(loc, 1);
+    Value state = builder.create<tensor::ExtractOp>(loc, store, idx1);
+    Value cast = builder.create<arith::BitcastOp>(loc, i64Ty, state);
+    return cast;
+  }
+
+  // TODO(#14859): Properly handle 128-bit storage keys.
+  if (storeTy.getDimSize(0) == 3 && storeETy.isInteger(64)) {
     Value idx1 = builder.create<arith::ConstantIndexOp>(loc, 1);
     Value state = builder.create<tensor::ExtractOp>(loc, store, idx1);
     Value cast = builder.create<arith::BitcastOp>(loc, i64Ty, state);
@@ -223,11 +249,20 @@ Value extractState64(OpBuilder &builder, Location loc, Value store) {
 
 Value setState64(OpBuilder &b, Location loc, Value store, Value state) {
   auto storeTy = cast<ShapedType>(store.getType());
-  if (storeTy.getRank() != 1) return nullptr;
+  if (storeTy.getRank() != 1)
+    return nullptr;
 
   Type storeETy = storeTy.getElementType();
 
   if (storeTy.getDimSize(0) == 2 && storeETy.isInteger(64)) {
+    state = b.create<arith::BitcastOp>(loc, storeETy, state);
+    Value idx1 = b.create<arith::ConstantIndexOp>(loc, 1);
+    return b.create<tensor::InsertOp>(loc, storeTy, state, store,
+                                      ValueRange{idx1});
+  }
+
+  // TODO(#14859): Properly handle 128-bit storage keys.
+  if (storeTy.getDimSize(0) == 3 && storeETy.isInteger(64)) {
     state = b.create<arith::BitcastOp>(loc, storeETy, state);
     Value idx1 = b.create<arith::ConstantIndexOp>(loc, 1);
     return b.create<tensor::InsertOp>(loc, storeTy, state, store,
@@ -288,7 +323,8 @@ std::pair<ShapedType, int64_t> threeFry32Shape(ShapedType resultTy) {
       std::max_element(shape.begin(), shape.end()) - shape.begin();
 
   for (int i = 0, s = shape.size(); i < s; i++) {
-    if (shape[i] & 0x1) continue;
+    if (shape[i] & 0x1)
+      continue;
     halfDim = i;
     break;
   }
@@ -316,10 +352,12 @@ LogicalResult generateLinalgThreeFry32(OpBuilder &builder, Location loc,
 
   // Extract the stateful values as an i64 and increment the state ahead.
   Value initialState = extractState64(builder, loc, store);
-  if (!initialState) return failure();
+  if (!initialState)
+    return failure();
 
   std::pair<Value, Value> keys = extractKey32(builder, loc, store);
-  if (!keys.first || !keys.second) return failure();
+  if (!keys.first || !keys.second)
+    return failure();
 
   ArithOpBuilder key0(builder, loc, keys.first);
   ArithOpBuilder key1(builder, loc, keys.second);
@@ -342,7 +380,7 @@ LogicalResult generateLinalgThreeFry32(OpBuilder &builder, Location loc,
   Value destRight = builder.create<tensor::EmptyOp>(
       loc, ArrayRef<int64_t>({count}), resultETy);
 
-  ShapedType destTy = destLeft.getType().cast<ShapedType>();
+  ShapedType destTy = llvm::cast<ShapedType>(destLeft.getType());
 
   SmallVector<AffineMap> indexingMaps(2, builder.getMultiDimIdentityMap(1));
   SmallVector<utils::IteratorType> iterators(1, utils::IteratorType::parallel);
@@ -407,10 +445,12 @@ LogicalResult generateLinalgThreeFry64(OpBuilder &builder, Location loc,
 
   // Extract the stateful values as an i64 and increment the state ahead.
   Value initialState = extractState64(builder, loc, store);
-  if (!initialState) return failure();
+  if (!initialState)
+    return failure();
 
   std::pair<Value, Value> keys = extractKey32(builder, loc, store);
-  if (!keys.first || !keys.second) return failure();
+  if (!keys.first || !keys.second)
+    return failure();
 
   ArithOpBuilder key0(builder, loc, keys.first);
   ArithOpBuilder key1(builder, loc, keys.second);
@@ -423,7 +463,7 @@ LogicalResult generateLinalgThreeFry64(OpBuilder &builder, Location loc,
   // Generate a 1D tensor with for the random values.
   Value dest = builder.create<tensor::EmptyOp>(loc, ArrayRef<int64_t>({count}),
                                                resultETy);
-  ShapedType destTy = dest.getType().cast<ShapedType>();
+  ShapedType destTy = llvm::cast<ShapedType>(dest.getType());
 
   SmallVector<AffineMap> indexingMaps(1, builder.getMultiDimIdentityMap(1));
   SmallVector<utils::IteratorType> iterators(1, utils::IteratorType::parallel);
@@ -446,6 +486,263 @@ LogicalResult generateLinalgThreeFry64(OpBuilder &builder, Location loc,
   return success();
 }
 
+using PhiloxKey = std::pair<ArithOpBuilder, ArithOpBuilder>;
+using PhiloxState = std::array<ArithOpBuilder, 4>;
+
+// Computes high and low words from multiplying 32 bit integers.
+// Per the paper, mulhi and mullo of the same arguments can be computed
+// Simultaneously in a single instruction on x86 architectures.
+std::pair<ArithOpBuilder, ArithOpBuilder> multiplyHilo(ArithOpBuilder counter,
+                                                       ArithOpBuilder key) {
+  counter = counter.extendUI(64);
+  key = key.extendUI(64);
+  ArithOpBuilder product = counter * key;
+  ArithOpBuilder ci64 = counter.constantI(/*value=*/32, /*bits=*/64);
+  ArithOpBuilder hi = product >> ci64;
+  hi = hi.truncI(32);
+  product = product.truncI(32);
+  return std::pair<ArithOpBuilder, ArithOpBuilder>{hi, product};
+}
+
+PhiloxState philoxRound(PhiloxState x, PhiloxKey key) {
+  // These are philox specific constants.
+  ArithOpBuilder m0 = x[0].constantI(0xD2511F53, 32);
+  ArithOpBuilder m1 = x[2].constantI(0xCD9E8D57, 32);
+  std::pair<ArithOpBuilder, ArithOpBuilder> p0 = multiplyHilo(x[0], m0);
+  std::pair<ArithOpBuilder, ArithOpBuilder> p1 = multiplyHilo(x[2], m1);
+
+  PhiloxState state = {p1.first ^ x[1] ^ key.first, p1.second,
+                       p0.first ^ x[3] ^ key.second, p0.second};
+  return state;
+}
+
+PhiloxKey raiseKey(PhiloxKey key) {
+  // These are philox specific constants.
+  ArithOpBuilder w0 = key.first.constantI(0x9E3779B9, 32);
+  ArithOpBuilder w1 = key.first.constantI(0xBB67AE85, 32);
+  return PhiloxKey{key.first + w0, key.second + w1};
+}
+
+// Implements the Philox 4x32 counter-based PRNG algorithm.
+// The Philox PRNG has been proposed in:
+// Salmon et al. SC 2011. Parallel random numbers: as easy as 1, 2, 3.
+// http://www.thesalmons.org/john/random123/papers/random123sc11.pdf
+std::array<ArithOpBuilder, 4> runPhilox4x32(PhiloxKey key,
+                                            ArithOpBuilder state) {
+  ArithOpBuilder index = state.linalgIndex(0);
+  index = index.indexCast(64);
+  index = index + state;
+
+  // Split into the 2xi32 used for threefry.
+  std::pair<ArithOpBuilder, ArithOpBuilder> input = splitI64(index);
+  ArithOpBuilder input0 = input.first;
+  ArithOpBuilder input1 = input.second;
+
+  // We initialize the state as such to match the XLA implementation.
+  PhiloxState state4 = {input0, input1, key.first, key.second};
+
+  // We perform 10 rounds to match the XLA implementation.
+  constexpr int kNumRounds = 10;
+  for (int round = 0; round < kNumRounds; ++round, key = raiseKey(key)) {
+    state4 = philoxRound(state4, key);
+  }
+  return state4;
+}
+
+// Generates an array of primitive type U32 with the given shape containing
+// random bits generated by the Philox algorithm. Returns the array and the new
+// state of the random number generator.
+LogicalResult generateLinalgPhilox32(OpBuilder &builder, Location loc,
+                                     ShapedType resultTy, Value &store,
+                                     Value &result) {
+  Type resultETy = resultTy.getElementType();
+
+  Value initialState = extractState64(builder, loc, store);
+  if (!initialState)
+    return failure();
+
+  std::pair<Value, Value> keys = extractKey32(builder, loc, store);
+  if (!keys.first || !keys.second)
+    return failure();
+
+  int64_t numElements = resultTy.getNumElements();
+  int64_t count = (numElements + 3) / 4;
+  ShapedType intermediateType =
+      RankedTensorType::get({count, 1}, resultTy.getElementType());
+  int64_t concatDim = 1;
+
+  // Compute the number of random i64s generated and increment state.
+  Value countVal =
+      builder.create<arith::ConstantOp>(loc, builder.getI64IntegerAttr(count));
+  Value newState = builder.create<arith::AddIOp>(loc, initialState, countVal);
+
+  // set up four outputs
+  Value dest0 = builder.create<tensor::EmptyOp>(loc, ArrayRef<int64_t>({count}),
+                                                resultETy);
+  Value dest1 = builder.create<tensor::EmptyOp>(loc, ArrayRef<int64_t>({count}),
+                                                resultETy);
+  Value dest2 = builder.create<tensor::EmptyOp>(loc, ArrayRef<int64_t>({count}),
+                                                resultETy);
+  Value dest3 = builder.create<tensor::EmptyOp>(loc, ArrayRef<int64_t>({count}),
+                                                resultETy);
+
+  ShapedType destTy = dest0.getType().cast<ShapedType>();
+
+  SmallVector<AffineMap> indexingMaps(4, builder.getMultiDimIdentityMap(1));
+  SmallVector<utils::IteratorType> iterators(1, utils::IteratorType::parallel);
+
+  linalg::GenericOp generic = builder.create<linalg::GenericOp>(
+      loc, TypeRange{destTy, destTy, destTy, destTy},
+      /*inputs=*/ValueRange(),
+      /*outputs=*/ValueRange{dest0, dest1, dest2, dest3},
+      /*indexingMaps=*/indexingMaps, iterators,
+      [&](OpBuilder &b, Location nestedLoc, ValueRange) {
+        auto output =
+            runPhilox4x32(PhiloxKey{ArithOpBuilder(b, nestedLoc, keys.first),
+                                    ArithOpBuilder(b, nestedLoc, keys.second)},
+                          ArithOpBuilder(b, nestedLoc, initialState));
+        auto out0 = output[0].truncI(resultETy.getIntOrFloatBitWidth());
+        auto out1 = output[1].truncI(resultETy.getIntOrFloatBitWidth());
+        auto out2 = output[2].truncI(resultETy.getIntOrFloatBitWidth());
+        auto out3 = output[3].truncI(resultETy.getIntOrFloatBitWidth());
+        b.create<linalg::YieldOp>(
+            loc, ValueRange{out0.val(), out1.val(), out2.val(), out3.val()});
+      });
+
+  if (resultTy.getNumElements() == 1) {
+    result = reshapeToTarget(builder, loc, resultTy, generic.getResult(0));
+    store = setState64(builder, loc, store, newState);
+    return success();
+  }
+
+  Value r0 =
+      reshapeToTarget(builder, loc, intermediateType, generic.getResult(0));
+  Value r1 =
+      reshapeToTarget(builder, loc, intermediateType, generic.getResult(1));
+  Value r2 =
+      reshapeToTarget(builder, loc, intermediateType, generic.getResult(2));
+  Value r3 =
+      reshapeToTarget(builder, loc, intermediateType, generic.getResult(3));
+
+  Value concatenate = builder.create<mlir::stablehlo::ConcatenateOp>(
+      loc, ValueRange{r0, r1, r2, r3}, builder.getI64IntegerAttr(concatDim));
+
+  // Collapse the concat dimension back into the parent.
+  llvm::SmallVector<int64_t> collapseShape(intermediateType.getShape());
+  collapseShape[0] = collapseShape[0] * 4;
+  Value reshapeIntermediate = builder.create<mlir::stablehlo::ReshapeOp>(
+      loc, resultTy.clone(collapseShape), concatenate);
+
+  // Slice to only the required results.
+  collapseShape[0] = resultTy.getNumElements();
+
+  llvm::SmallVector<int64_t> offset(resultTy.getRank(), 0);
+  llvm::SmallVector<int64_t> stride(resultTy.getRank(), 1);
+  Value slice = builder.create<mlir::stablehlo::SliceOp>(
+      loc, intermediateType.clone(collapseShape), reshapeIntermediate,
+      builder.getI64TensorAttr(offset), builder.getI64TensorAttr(collapseShape),
+      builder.getI64TensorAttr(stride));
+  Value reshapeResult =
+      builder.create<mlir::stablehlo::ReshapeOp>(loc, resultTy, slice);
+
+  // Set the new tensor values.
+  store = setState64(builder, loc, store, newState);
+  result = reshapeResult;
+
+  return success();
+}
+
+LogicalResult generateLinalgPhilox64(OpBuilder &builder, Location loc,
+                                     ShapedType resultTy, Value &store,
+                                     Value &result) {
+  Type resultETy = resultTy.getElementType();
+
+  Value initialState = extractState64(builder, loc, store);
+  if (!initialState)
+    return failure();
+
+  std::pair<Value, Value> keys = extractKey32(builder, loc, store);
+  if (!keys.first || !keys.second)
+    return failure();
+
+  int64_t numElements = resultTy.getNumElements();
+  int64_t count = (numElements + 1) / 2;
+  ShapedType intermediateType =
+      RankedTensorType::get({count, 1}, resultTy.getElementType());
+  int64_t concatDim = 1;
+
+  // Compute the number of random i64s generated and increment state.
+  Value countVal =
+      builder.create<arith::ConstantOp>(loc, builder.getI64IntegerAttr(count));
+  Value newState = builder.create<arith::AddIOp>(loc, initialState, countVal);
+
+  // set up four outputs
+  Value dest0 = builder.create<tensor::EmptyOp>(loc, ArrayRef<int64_t>({count}),
+                                                resultETy);
+  Value dest1 = builder.create<tensor::EmptyOp>(loc, ArrayRef<int64_t>({count}),
+                                                resultETy);
+  ShapedType destTy = dest0.getType().cast<ShapedType>();
+
+  SmallVector<AffineMap> indexingMaps(2, builder.getMultiDimIdentityMap(1));
+  SmallVector<utils::IteratorType> iterators(1, utils::IteratorType::parallel);
+
+  linalg::GenericOp generic = builder.create<linalg::GenericOp>(
+      loc, TypeRange{destTy, destTy},
+      /*inputs=*/ValueRange(),
+      /*outputs=*/ValueRange{dest0, dest1},
+      /*indexingMaps=*/indexingMaps, iterators,
+      [&](OpBuilder &b, Location nestedLoc, ValueRange) {
+        auto output =
+            runPhilox4x32(PhiloxKey{ArithOpBuilder(b, nestedLoc, keys.first),
+                                    ArithOpBuilder(b, nestedLoc, keys.second)},
+                          ArithOpBuilder(b, nestedLoc, initialState));
+        auto out0 = output[0];
+        auto out1 = output[1];
+        auto out2 = output[2];
+        auto out3 = output[3];
+        Value result1 = fuseI32s(out0, out1).val();
+        Value result2 = fuseI32s(out2, out3).val();
+        b.create<linalg::YieldOp>(loc, ValueRange{result1, result2});
+      });
+
+  if (resultTy.getNumElements() == 1) {
+    result = reshapeToTarget(builder, loc, resultTy, generic.getResult(0));
+    store = setState64(builder, loc, store, newState);
+    return success();
+  }
+
+  Value r0 =
+      reshapeToTarget(builder, loc, intermediateType, generic.getResult(0));
+  Value r1 =
+      reshapeToTarget(builder, loc, intermediateType, generic.getResult(1));
+  Value concatenate = builder.create<mlir::stablehlo::ConcatenateOp>(
+      loc, ValueRange{r0, r1}, builder.getI64IntegerAttr(concatDim));
+
+  // Collapse the concat dimension back into the parent.
+  llvm::SmallVector<int64_t> collapseShape(intermediateType.getShape());
+  collapseShape[0] = collapseShape[0] * 2;
+  Value reshapeIntermediate = builder.create<mlir::stablehlo::ReshapeOp>(
+      loc, resultTy.clone(collapseShape), concatenate);
+
+  // Slice to only the required results.
+  collapseShape[0] = resultTy.getNumElements();
+
+  llvm::SmallVector<int64_t> offset(resultTy.getRank(), 0);
+  llvm::SmallVector<int64_t> stride(resultTy.getRank(), 1);
+  Value slice = builder.create<mlir::stablehlo::SliceOp>(
+      loc, intermediateType.clone(collapseShape), reshapeIntermediate,
+      builder.getI64TensorAttr(offset), builder.getI64TensorAttr(collapseShape),
+      builder.getI64TensorAttr(stride));
+  Value reshapeResult =
+      builder.create<mlir::stablehlo::ReshapeOp>(loc, resultTy, slice);
+
+  // Set the new tensor values.
+  store = setState64(builder, loc, store, newState);
+  result = reshapeResult;
+
+  return success();
+}
+
 LogicalResult generateLinalgThreeFry(OpBuilder &builder, Location loc,
                                      ShapedType resultTy, Value &state,
                                      Value &result) {
@@ -455,11 +752,25 @@ LogicalResult generateLinalgThreeFry(OpBuilder &builder, Location loc,
   if (bitwidth == 64) {
     return generateLinalgThreeFry64(builder, loc, resultTy, state, result);
   }
-  if (bitwidth == 32) {
+  if (bitwidth == 32 || bitwidth == 16 || bitwidth == 8) {
     return generateLinalgThreeFry32(builder, loc, resultTy, state, result);
   }
-  if (bitwidth == 16) {
-    return generateLinalgThreeFry32(builder, loc, resultTy, state, result);
+
+  return failure();
+}
+
+LogicalResult generateLinalgPhilox(OpBuilder &builder, Location loc,
+                                   ShapedType resultTy, Value &state,
+                                   Value &result) {
+  Type eTy = resultTy.getElementType();
+  unsigned bitwidth = eTy.getIntOrFloatBitWidth();
+  if (bitwidth == 64) {
+    return generateLinalgPhilox64(builder, loc, resultTy, state, result);
+  }
+
+  // The 32 bit implementation trancates to result eTy.
+  if (bitwidth == 32 || bitwidth == 16 || bitwidth == 8) {
+    return generateLinalgPhilox32(builder, loc, resultTy, state, result);
   }
 
   return failure();
@@ -469,9 +780,9 @@ struct RngBitGeneratorConverter final
     : OpConversionPattern<mlir::stablehlo::RngBitGeneratorOp> {
   using OpConversionPattern::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(
-      mlir::stablehlo::RngBitGeneratorOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(mlir::stablehlo::RngBitGeneratorOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value state = adaptor.getInitialState();
     auto resultTy = dyn_cast_or_null<ShapedType>(
@@ -490,6 +801,17 @@ struct RngBitGeneratorConverter final
       return success();
     }
 
+    if (op.getRngAlgorithm() == mlir::stablehlo::RngAlgorithm::PHILOX ||
+        op.getRngAlgorithm() == mlir::stablehlo::RngAlgorithm::DEFAULT) {
+      Value random;
+      if (failed(
+              generateLinalgPhilox(rewriter, loc, resultTy, state, random))) {
+        return failure();
+      }
+      rewriter.replaceOp(op, {state, random});
+      return success();
+    }
+
     return failure();
   }
 };
@@ -498,9 +820,9 @@ struct RngUniformConversion final
     : OpConversionPattern<mlir::stablehlo::RngOp> {
   using OpConversionPattern::OpConversionPattern;
 
-  LogicalResult matchAndRewrite(
-      mlir::stablehlo::RngOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(mlir::stablehlo::RngOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
     // We only handle uniform distributions.
     if (op.getRngDistribution() != mlir::stablehlo::RngDistribution::UNIFORM) {
       return failure();
@@ -578,7 +900,7 @@ struct RngUniformConversion final
     return success();
   }
 };
-}  // namespace
+} // namespace
 
 namespace detail {
 void populateStableHloRandomToLinalgConversionPatterns(
@@ -587,5 +909,5 @@ void populateStableHloRandomToLinalgConversionPatterns(
   patterns->add<RngBitGeneratorConverter, RngUniformConversion>(typeConverter,
                                                                 context);
 }
-}  // namespace detail
-}  // namespace mlir::iree_compiler::stablehlo
+} // namespace detail
+} // namespace mlir::iree_compiler::stablehlo

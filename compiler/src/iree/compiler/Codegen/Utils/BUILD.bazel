@@ -17,15 +17,15 @@ package(
 iree_compiler_cc_library(
     name = "Utils",
     srcs = [
-        "EncodingInfo.cpp",
         "GPUUtils.cpp",
+        "LinalgOpInfo.cpp",
         "LinkingUtils.cpp",
         "MarkerUtils.cpp",
         "Utils.cpp",
     ],
     hdrs = [
-        "EncodingInfo.h",
         "GPUUtils.h",
+        "LinalgOpInfo.h",
         "LinkingUtils.h",
         "MarkerUtils.h",
         "Utils.h",

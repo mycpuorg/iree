@@ -25,18 +25,6 @@ extern "C" {
 // Types and Enums
 //===----------------------------------------------------------------------===//
 
-// Returns the number of elements in an array as a compile-time constant, which
-// can be used in defining new arrays. Fails at compile-time if |arr| is not a
-// static array (such as if used on a pointer type). Similar to `countof()`.
-//
-// Example:
-//  uint8_t kConstantArray[512];
-//  assert(IREE_ARRAYSIZE(kConstantArray) == 512);
-#define IREE_ARRAYSIZE(arr) (sizeof(arr) / sizeof(arr[0]))
-
-#define iree_min(lhs, rhs) ((lhs) <= (rhs) ? (lhs) : (rhs))
-#define iree_max(lhs, rhs) ((lhs) <= (rhs) ? (rhs) : (lhs))
-
 #if IREE_STATISTICS_ENABLE
 // Evalutes the expression code only if statistics are enabled.
 //
@@ -229,6 +217,10 @@ iree_allocator_clone(iree_allocator_t allocator,
 // Frees a previously-allocated block of memory to the given allocator.
 IREE_API_EXPORT void iree_allocator_free(iree_allocator_t allocator, void* ptr);
 
+//===----------------------------------------------------------------------===//
+// Built-in iree_allocator_t implementations
+//===----------------------------------------------------------------------===//
+
 // Default C allocator controller using malloc/free.
 IREE_API_EXPORT iree_status_t
 iree_allocator_system_ctl(void* self, iree_allocator_command_t command,
@@ -251,6 +243,46 @@ static inline iree_allocator_t iree_allocator_null(void) {
 // Returns true if the allocator is `iree_allocator_null()`.
 static inline bool iree_allocator_is_null(iree_allocator_t allocator) {
   return allocator.ctl == NULL;
+}
+
+typedef struct {
+  iree_host_size_t capacity;
+  iree_host_size_t length;
+  iree_host_size_t head_size;
+  uint8_t* buffer;
+} iree_allocator_inline_storage_t;
+
+// Stack storage for an inline arena-style allocator.
+//
+// Usage:
+//  IREE_ALLOCATOR_INLINE_STORAGE(inline_storage, 2048);
+//  something_allocating(iree_allocator_inline_arena(&inline_storage.header));
+#define IREE_ALLOCATOR_INLINE_STORAGE(var, storage_capacity) \
+  struct {                                                   \
+    iree_allocator_inline_storage_t header;                  \
+    uint8_t data[storage_capacity];                          \
+  } var = {                                                  \
+      .header =                                              \
+          {                                                  \
+              .capacity = sizeof((var).data),                \
+              .length = 0,                                   \
+              .buffer = &(var).data[0],                      \
+          },                                                 \
+  };
+
+// Inline arena allocator controller used by iree_allocator_inline_arena.
+IREE_API_EXPORT iree_status_t
+iree_allocator_inline_arena_ctl(void* self, iree_allocator_command_t command,
+                                const void* params, void** inout_ptr);
+
+// Allocates with arena semantics within the given fixed-size |storage|.
+// Frees are ignored and all allocations will fail once the allocated length
+// exceeds the capacity. A special case for reallocations of the entire
+// outstanding memory is supported to allow the arena to be implicitly reset.
+static inline iree_allocator_t iree_allocator_inline_arena(
+    iree_allocator_inline_storage_t* storage) {
+  iree_allocator_t v = {storage, iree_allocator_inline_arena_ctl};
+  return v;
 }
 
 //===----------------------------------------------------------------------===//

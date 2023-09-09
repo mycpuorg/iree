@@ -57,6 +57,8 @@ iree_runtime_cc_library(
         "executable_cache.h",
         "fence.c",
         "fence.h",
+        "file.c",
+        "file.h",
         "pipeline_layout.c",
         "pipeline_layout.h",
         "resource.h",
@@ -70,8 +72,6 @@ iree_runtime_cc_library(
     ],
     deps = [
         "//runtime/src/iree/base",
-        "//runtime/src/iree/base:core_headers",
-        "//runtime/src/iree/base:tracing",
         "//runtime/src/iree/base/internal",
         "//runtime/src/iree/base/internal:path",
         "//runtime/src/iree/base/internal:synchronization",

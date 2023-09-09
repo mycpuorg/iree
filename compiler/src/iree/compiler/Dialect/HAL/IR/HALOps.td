@@ -30,6 +30,13 @@ class HAL_MakeTupleOp<string mnemonic, list<Trait> traits = []> :
 //===----------------------------------------------------------------------===//
 // TODO(benvanik): remove these as the sequencer/other HAL ops are added.
 
+def OpGroupExperimentalOps : OpDocGroup {
+  let summary = "Experimental ops";
+  let description = "Temporary hack ops expected to be removed in the future.";
+}
+
+let opDocGroup = OpGroupExperimentalOps in {
+
 def HAL_ExSharedDeviceOp : HAL_PureOp<"ex.shared_device", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
   ]> {
@@ -48,9 +55,63 @@ def HAL_ExSharedDeviceOp : HAL_PureOp<"ex.shared_device", [
   ];
 }
 
+def HAL_ExFileFromMemoryOp : HAL_Op<"ex.file.from_memory", [
+    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
+  ]> {
+  let summary = [{creates a file mapped into a byte range of a host buffer}];
+  let description = [{
+    Returns a file handle that is backed by the given `buffer` contents.
+    Behavior is undefined if the buffer contents change while the accesses are
+    in-flight.
+
+    Experimental as the exact interface for getting files from module contents
+    still needs iteration. Most hardware APIs require a file descriptor or
+    native platform handle but here we only have host pointers. When
+    memory-mapped some systems allow for retrieval of the platform handle from
+    a virtual address (GetMappedFileNameA/posix_mem_offset) but the APIs are
+    sketchy and likely slow. Instead we should probably have a way to query for
+    a file handle derived from the calling module by stack-walking and asking
+    the VM module for its handle. Until we can figure this out this method will
+    be marked epxerimental.
+  }];
+
+  let arguments = (ins
+    HAL_Device:$device,
+    HAL_DeviceQueueAffinity:$queue_affinity,
+    HAL_MemoryAccessBitfieldAttr:$access,
+    Util_BufferType:$buffer,
+    HAL_DeviceSize:$offset,
+    HAL_DeviceSize:$length,
+    I32:$flags
+  );
+  let results = (outs
+    HAL_File:$result
+  );
+
+  let assemblyFormat = [{
+    `device` `(` $device `:` type($device) `)`
+    `affinity` `(` $queue_affinity `)`
+    `access` `(` $access `)`
+    `buffer` `(` $buffer `:` type($buffer) `)`
+    `` `[` $offset `for` $length `]`
+    `flags` `(` $flags `)`
+    `:` type($result)
+    attr-dict-with-keyword
+  }];
+}
+
+} // OpGroupExperimentalOps
+
 //===----------------------------------------------------------------------===//
 // Pseudo ops for conversion support
 //===----------------------------------------------------------------------===//
+
+def OpGroupPseudoOps : OpDocGroup {
+  let summary = "Pseudo Ops";
+  let description = "Pseudo ops for conversion support.";
+}
+
+let opDocGroup = OpGroupPseudoOps in {
 
 def HAL_TensorImportOp : HAL_PureOp<"tensor.import", [
   AttrSizedOperandSegments,
@@ -100,11 +161,13 @@ def HAL_TensorImportOp : HAL_PureOp<"tensor.import", [
     OpBuilder<(ins
       "Type":$resultType,
       "Value":$source,
+      "TypeAttr":$targetEncoding,
       "StringAttr":$name
     )>,
     OpBuilder<(ins
       "Type":$resultType,
       "Value":$source,
+      "TypeAttr":$targetEncoding,
       "Value":$waitFence,
       "StringAttr":$name
     )>,
@@ -150,7 +213,7 @@ def HAL_TensorExportOp : HAL_PureOp<"tensor.export", [
     AnyTensor:$source,
     TypeAttr:$source_encoding,
     HAL_ShapeDynamicDims:$source_dims,
-    Optional<HAL_Buffer>:$target_storage,
+    Optional<AnyTypeOf<[HAL_Buffer, HAL_BufferView]>>:$target_storage,
     OptionalAttr<StrAttr>:$name
   );
   let results = (outs
@@ -160,7 +223,7 @@ def HAL_TensorExportOp : HAL_PureOp<"tensor.export", [
   let assemblyFormat = [{
     $source
     ($name^)?
-    (`into` $target_storage^)?
+    (`into` `(` $target_storage^ `:` type($target_storage) `)`)?
     `:`
     custom<TypeAlias>($source_encoding, type($source)) (`{` $source_dims^ `}`)?
     `->`
@@ -172,6 +235,7 @@ def HAL_TensorExportOp : HAL_PureOp<"tensor.export", [
     OpBuilder<(ins
       "Type":$resultType,
       "Value":$source,
+      "TypeAttr":$sourceEncoding,
       "StringAttr":$name
     )>,
   ];
@@ -225,9 +289,18 @@ def HAL_TensorBarrierOp : HAL_Op<"tensor.barrier", [
   let hasCanonicalizer = 1;
 }
 
+} // OpGroupPseudoOps
+
 //===----------------------------------------------------------------------===//
 // !hal.allocator / iree_hal_allocator_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupAllocatorOps : OpDocGroup {
+  let summary = "Allocator ops";
+  let description = "Ops for `!hal.allocator` / `iree_hal_allocator_t`.";
+}
+
+let opDocGroup = OpGroupAllocatorOps in {
 
 def HAL_AllocatorAllocateOp : HAL_Op<"allocator.allocate", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -242,6 +315,7 @@ def HAL_AllocatorAllocateOp : HAL_Op<"allocator.allocate", [
 
   let arguments = (ins
     HAL_Allocator:$allocator,
+    HAL_DeviceQueueAffinity:$queue_affinity,
     HAL_MemoryTypeBitfieldAttr:$memory_types,
     HAL_BufferUsageBitfieldAttr:$buffer_usage,
     HAL_DeviceSize:$result_size
@@ -253,6 +327,7 @@ def HAL_AllocatorAllocateOp : HAL_Op<"allocator.allocate", [
   // TODO(benvanik): change type/usage to ref params.
   let assemblyFormat = [{
     `<` $allocator `:` type($allocator) `>`
+    `affinity` `(` $queue_affinity `)`
     `type` `(` $memory_types `)`
     `usage` `(` $buffer_usage `)`
     `:` custom<SizeAwareType>(type($result), $result_size)
@@ -260,19 +335,22 @@ def HAL_AllocatorAllocateOp : HAL_Op<"allocator.allocate", [
   }];
 }
 
-def HAL_AllocatorAllocateInitializedOp : HAL_Op<"allocator.allocate.initialized", [
+def HAL_AllocatorImportOp : HAL_Op<"allocator.import", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
     DeclareOpInterfaceMethods<Util_SizeAwareOp>,
   ]> {
-  let summary = [{allocator-supported host buffer wrapping operation}];
+  let summary = [{allocator-supported host buffer import operation}];
   let description = [{
-    Wraps a !hal.buffer around host read-only memory backed by the given byte
-    buffer. The returned buffer may be host-only and not directly usable on
-    devices.
+    Tries importing host memory backed by the given byte buffer into a
+    device accessible `!hal.buffer`. The returned buffer may be host-only and
+    not directly usable on devices. If the mapping cannot be completed (such as
+    trying to map the host memory as device-local on devices with discrete
+    memory) then `did_import` will indicate that the returned buffer is null.
   }];
 
   let arguments = (ins
     HAL_Allocator:$allocator,
+    HAL_DeviceQueueAffinity:$queue_affinity,
     HAL_MemoryTypeBitfieldAttr:$memory_types,
     HAL_BufferUsageBitfieldAttr:$buffer_usage,
     // TODO(benvanik): support other types (and mutable buffers).
@@ -281,6 +359,7 @@ def HAL_AllocatorAllocateInitializedOp : HAL_Op<"allocator.allocate.initialized"
     HAL_DeviceSize:$length
   );
   let results = (outs
+    I1:$did_import,
     HAL_Buffer:$result
   );
 
@@ -288,54 +367,26 @@ def HAL_AllocatorAllocateInitializedOp : HAL_Op<"allocator.allocate.initialized"
   let assemblyFormat = [{
     `<` $allocator `:` type($allocator) `>`
     `source` `(` $source `:` type($source) `)` `` `[` $offset `,` $length `]`
+    `affinity` `(` $queue_affinity `)`
     `type` `(` $memory_types `)`
     `usage` `(` $buffer_usage `)`
-    `:` type($result)
+    `:` type($did_import) `,` type($result)
     attr-dict-with-keyword
   }];
 }
 
-def HAL_AllocatorTryMapOp : HAL_Op<"allocator.try_map", [
-    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
-    DeclareOpInterfaceMethods<Util_SizeAwareOp>,
-  ]> {
-  let summary = [{allocator-supported host buffer wrapping operation}];
-  let description = [{
-    Tries wrapping a !hal.buffer around host read-only memory backed by the
-    given byte buffer. The returned buffer may be host-only and not directly
-    usable on devices. If the mapping cannot be completed (such as trying to
-    map the host memory as device-local on devices with discrete memory) then
-    did_map will indicate that the returned buffer is null.
-  }];
-
-  let arguments = (ins
-    HAL_Allocator:$allocator,
-    HAL_MemoryTypeBitfieldAttr:$memory_types,
-    HAL_BufferUsageBitfieldAttr:$buffer_usage,
-    // TODO(benvanik): support other types (and mutable buffers).
-    Util_BufferType:$source,
-    HAL_DeviceSize:$offset,
-    HAL_DeviceSize:$length
-  );
-  let results = (outs
-    I1:$did_map,
-    HAL_Buffer:$result
-  );
-
-  // TODO(benvanik): change type/usage to ref params.
-  let assemblyFormat = [{
-    `<` $allocator `:` type($allocator) `>`
-    `source` `(` $source `:` type($source) `)` `` `[` $offset `,` $length `]`
-    `type` `(` $memory_types `)`
-    `usage` `(` $buffer_usage `)`
-    `:` type($did_map) `,` type($result)
-    attr-dict-with-keyword
-  }];
-}
+} // OpGroupAllocatorOps
 
 //===----------------------------------------------------------------------===//
 // !hal.buffer / iree_hal_buffer_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupBufferOps : OpDocGroup {
+  let summary = "Buffer ops";
+  let description = "Ops for `!hal.buffer` / `iree_hal_buffer_t`.";
+}
+
+let opDocGroup = OpGroupBufferOps in {
 
 def HAL_BufferAssertOp : HAL_Op<"buffer.assert", []> {
   let summary = [{buffer compatibility assertion}];
@@ -467,9 +518,18 @@ def HAL_BufferStoreOp : HAL_Op<"buffer.store"> {
   }];
 }
 
+} // OpGroupBufferOps
+
 //===----------------------------------------------------------------------===//
 // !hal.buffer_view / iree_hal_buffer_view_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupBufferViewOps : OpDocGroup {
+  let summary = "Buffer view ops";
+  let description = "Ops for `!hal.buffer_view` / `iree_hal_buffer_view_t`.";
+}
+
+let opDocGroup = OpGroupBufferViewOps in {
 
 def HAL_BufferViewCreateOp : HAL_PureOp<"buffer_view.create", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -577,8 +637,6 @@ def HAL_BufferViewBufferOp : HAL_PureOp<"buffer_view.buffer", [
     `:` type($result)
     attr-dict-with-keyword
   }];
-
-  let hasCanonicalizer = 1;
 }
 
 def HAL_BufferViewElementTypeOp : HAL_PureOp<"buffer_view.element_type"> {
@@ -682,9 +740,18 @@ def HAL_BufferViewTraceOp : HAL_Op<"buffer_view.trace", []> {
   }];
 }
 
+} // OpGroupBufferViewOps
+
 //===----------------------------------------------------------------------===//
 // !hal.channel / iree_hal_channel_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupChannelOps : OpDocGroup {
+  let summary = "Channel ops";
+  let description = "Ops for `!hal.channel` / `iree_hal_channel_t`.";
+}
+
+let opDocGroup = OpGroupChannelOps in {
 
 def HAL_ChannelCreateOp : HAL_Op<"channel.create", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -724,6 +791,44 @@ def HAL_ChannelCreateOp : HAL_Op<"channel.create", [
     `:` type($result)
     attr-dict-with-keyword
   }];
+
+  let hasCanonicalizer = 1;
+}
+
+def HAL_ChannelSplitOp : HAL_Op<"channel.split", [
+    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
+  ]> {
+  let summary = [{splits a collective communication channel}];
+  let description = [{
+    Partitions the group associated with the given channel into disjoint
+    subgroups for each unique value of color. Each new subgroup contains all
+    participants of the same color and within each subgroup the key argument
+    is used to define the rank order. When multiple participants in a group
+    use the same key the tie will be broken using their rank in the parent
+    group. A color of -1 indicates that the rank does not participate in any
+    subgroup and will return a null channel.
+  }];
+
+  let arguments = (ins
+    HAL_Channel:$channel,
+    I32:$color,
+    I32:$key,
+    I32Attr:$flags
+  );
+  let results = (outs
+    HAL_Channel:$result
+  );
+
+  let assemblyFormat = [{
+    `<` $channel `:` type($channel) `>`
+    `color` `(` $color `)`
+    `key` `(` $key `)`
+    `flags` `(` $flags `)`
+    `:` type($result)
+    attr-dict-with-keyword
+  }];
+
+  let hasCanonicalizer = 1;
 }
 
 def HAL_ChannelRankAndCountOp : HAL_PureOp<"channel.rank_and_count", [
@@ -750,9 +855,18 @@ def HAL_ChannelRankAndCountOp : HAL_PureOp<"channel.rank_and_count", [
   }];
 }
 
+} // OpGroupChannelOps
+
 //===----------------------------------------------------------------------===//
 // !hal.command_buffer / iree_hal_command_buffer_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupCommandBufferOps : OpDocGroup {
+  let summary = "Command buffer ops";
+  let description = "Ops for `!hal.command_buffer` / `iree_hal_command_buffer_t`.";
+}
+
+let opDocGroup = OpGroupCommandBufferOps in {
 
 def HAL_CommandBufferCreateOp : HAL_Op<"command_buffer.create", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -1159,9 +1273,20 @@ def HAL_CommandBufferDispatchIndirectOp : HAL_Op<"command_buffer.dispatch.indire
   }];
 }
 
+} // OpGroupCommandBufferOps
+
 //===----------------------------------------------------------------------===//
 // !hal.descriptor_set_layout / iree_hal_descriptor_set_layout_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupDescriptorSetLayoutOps : OpDocGroup {
+  let summary = "Descriptor set layout ops";
+  let description = [{
+    Ops for `!hal.descriptor_set_layout` / `iree_hal_descriptor_set_layout_t`.
+  }];
+}
+
+let opDocGroup = OpGroupDescriptorSetLayoutOps in {
 
 def HAL_DescriptorSetLayoutCreateOp :
   HAL_PureOp<"descriptor_set_layout.create", [
@@ -1220,9 +1345,18 @@ def HAL_DescriptorSetLayoutLookupOp : HAL_PureOp<"descriptor_set_layout.lookup",
   }];
 }
 
+} // OpGroupDescriptorSetLayoutOps
+
 //===----------------------------------------------------------------------===//
 // !hal.device / iree_hal_device_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupDeviceOps : OpDocGroup {
+  let summary = "Device ops";
+  let description = "Ops for `!hal.device` / `iree_hal_device_t`.";
+}
+
+let opDocGroup = OpGroupDeviceOps in {
 
 def HAL_DeviceAllocatorOp : HAL_PureOp<"device.allocator", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -1501,6 +1635,90 @@ def HAL_DeviceQueueDeallocaOp : HAL_Op<"device.queue.dealloca"> {
   let hasVerifier = 1;
 }
 
+def HAL_DeviceQueueReadOp : HAL_Op<"device.queue.read"> {
+  let summary = [{reads a segment from a file into a device buffer}];
+  let description = [{
+    Enqueues a file read operation that streams a segment of the source file
+    defined by the source offset and length into the target HAL buffer at the
+    specified target offset. The queue affinity should be set to where the
+    target buffer will be consumed. The source file must have read permission
+    and the target buffer must have transfer-target usage. Read failure will
+    result in propagated semaphore failure or device loss.
+  }];
+
+  let arguments = (ins
+    HAL_Device:$device,
+    HAL_DeviceQueueAffinity:$queue_affinity,
+    HAL_Fence:$wait_fence,
+    HAL_Fence:$signal_fence,
+    HAL_File:$source_file,
+    I64:$source_offset,
+    HAL_Buffer:$target_buffer,
+    HAL_DeviceSize:$target_offset,
+    HAL_DeviceSize:$length,
+    I32Attr:$flags
+  );
+  let results = (outs);
+
+  let assemblyFormat = [{
+    `<` $device `:` type($device) `>`
+    `affinity` `(` $queue_affinity `)`
+    `wait` `(` $wait_fence `)`
+    `signal` `(` $signal_fence `)`
+    `source` `(` $source_file `:` type($source_file) `)`
+    `` `[` $source_offset `]`
+    `target` `(` $target_buffer `:` type($target_buffer) `)`
+    `` `[` $target_offset `]`
+    `length` `(` $length `)`
+    `flags` `(` $flags `)`
+    attr-dict-with-keyword
+  }];
+
+  let hasVerifier = 1;
+}
+
+def HAL_DeviceQueueWriteOp : HAL_Op<"device.queue.write"> {
+  let summary = [{writes a segment from a device buffer into a file}];
+  let description = [{
+    Enqueues a file write operation that streams a segment of the source HAL
+    buffer defined by the source offset and length into the target file at the
+    specified target offset. The queue affinity should be set to where the
+    source buffer was produced. The source buffer must have transfer-source
+    usage and the target file must have write permission. Write failure will
+    result in propagated semaphore failure or device loss.
+  }];
+
+  let arguments = (ins
+    HAL_Device:$device,
+    HAL_DeviceQueueAffinity:$queue_affinity,
+    HAL_Fence:$wait_fence,
+    HAL_Fence:$signal_fence,
+    HAL_Buffer:$source_buffer,
+    HAL_DeviceSize:$source_offset,
+    HAL_File:$target_file,
+    I64:$target_offset,
+    HAL_DeviceSize:$length,
+    I32Attr:$flags
+  );
+  let results = (outs);
+
+  let assemblyFormat = [{
+    `<` $device `:` type($device) `>`
+    `affinity` `(` $queue_affinity `)`
+    `wait` `(` $wait_fence `)`
+    `signal` `(` $signal_fence `)`
+    `source` `(` $source_buffer `:` type($source_buffer) `)`
+    `` `[` $source_offset `]`
+    `target` `(` $target_file `:` type($target_file) `)`
+    `` `[` $target_offset `]`
+    `length` `(` $length `)`
+    `flags` `(` $flags `)`
+    attr-dict-with-keyword
+  }];
+
+  let hasVerifier = 1;
+}
+
 def HAL_DeviceQueueExecuteOp : HAL_Op<"device.queue.execute"> {
   let summary = [{enqueues command buffer execution}];
   let description = [{
@@ -1559,9 +1777,18 @@ def HAL_DeviceQueueFlushOp : HAL_Op<"device.queue.flush"> {
   }];
 }
 
+} // OpGroupDeviceOps
+
 //===----------------------------------------------------------------------===//
 // !hal.executable / iree_hal_executable_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupExecutableOps : OpDocGroup {
+  let summary = "Executable ops";
+  let description = "Ops for `!hal.executable` / `iree_hal_executable_t`.";
+}
+
+let opDocGroup = OpGroupExecutableOps in {
 
 def HAL_ExecutableSourceOp : HAL_Op<"executable.source", [
     IsolatedFromAbove,
@@ -2064,9 +2291,18 @@ def HAL_ExecutableCalculateWorkgroupsOp : HAL_PureOp<"executable.calculate_workg
   }];
 }
 
+} // OpGroupExecutableOps
+
 //===----------------------------------------------------------------------===//
 // hal.instrument.*
 //===----------------------------------------------------------------------===//
+
+def OpGroupInstrumentOps : OpDocGroup {
+  let summary = "Instrument ops";
+  let description = "Ops for `!hal.instrument.*`.";
+}
+
+let opDocGroup = OpGroupInstrumentOps in {
 
 def HAL_InstrumentWorkgroupOp : HAL_Op<"instrument.workgroup", []> {
   let summary = [{emits a dispatch workgroup instrumentation event}];
@@ -2208,9 +2444,18 @@ def HAL_InstrumentMemoryStoreOp : HAL_PureOp<"instrument.memory.store", [
   }];
 }
 
+} // OpGroupInstrumentOps
+
 //===----------------------------------------------------------------------===//
 // hal.interface
 //===----------------------------------------------------------------------===//
+
+def OpGroupInterfaceOps : OpDocGroup {
+  let summary = "Interface ops";
+  let description = "Ops for `!hal.interface.*`.";
+}
+
+let opDocGroup = OpGroupInterfaceOps in {
 
 def HAL_InterfaceWorkgroupIDOp : HAL_PureOp<"interface.workgroup.id", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -2396,7 +2641,7 @@ def HAL_InterfaceBindingSubspanOp : HAL_PureOp<"interface.binding.subspan", [
       "Value":$byte_offset,
       "ValueRange":$dynamic_dims,
       "IntegerAttr":$alignment,
-      CArg<"std::optional<DescriptorFlags>", "llvm::None">:$flags
+      CArg<"std::optional<DescriptorFlags>", "std::nullopt">:$flags
     )>,
   ];
 
@@ -2417,9 +2662,20 @@ def HAL_InterfaceBindingSubspanOp : HAL_PureOp<"interface.binding.subspan", [
   }];
 }
 
+} // OpGroupInterfaceOps
+
 //===----------------------------------------------------------------------===//
 // !hal.pipeline_layout / iree_hal_pipeline_layout_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupPipelineLayoutOps : OpDocGroup {
+  let summary = "Pipeline layout ops";
+  let description = [{
+    Ops for `!hal.pipeline_layout` / `iree_hal_pipeline_layout_t`.
+  }];
+}
+
+let opDocGroup = OpGroupPipelineLayoutOps in {
 
 def HAL_PipelineLayoutCreateOp : HAL_PureOp<"pipeline_layout.create", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -2479,9 +2735,18 @@ def HAL_PipelineLayoutLookupOp : HAL_PureOp<"pipeline_layout.lookup", [
   }];
 }
 
+} // OpGroupPipelineLayoutOps
+
 //===----------------------------------------------------------------------===//
 // !hal.fence / iree_hal_fence_t
 //===----------------------------------------------------------------------===//
+
+def OpGroupFenceOps : OpDocGroup {
+  let summary = "Fence ops";
+  let description = "Ops for `!hal.fence` / `iree_hal_fence_t`.";
+}
+
+let opDocGroup = OpGroupFenceOps in {
 
 def HAL_FenceCreateOp : HAL_Op<"fence.create", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -2626,5 +2891,7 @@ def HAL_FenceAwaitOp : HAL_Op<"fence.await", [
 
   let hasCanonicalizer = 1;
 }
+
+} // OpGroupFenceOps
 
 #endif  // IREE_DIALECT_HAL_OPS

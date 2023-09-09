@@ -40,6 +40,8 @@ if(IREE_HOST_BIN_DIR AND NOT IREE_BUILD_COMPILER)
   iree_import_binary(NAME iree-compile)
   iree_import_binary(NAME iree-opt)
   iree_import_binary(NAME iree-run-mlir)
+  iree_import_binary(NAME clang)
+  iree_import_binary(NAME llvm-link)
 endif()
 
 # TODO(#6353): Tools has thread dependencies in gtest, benchmark, yaml, etc.
@@ -57,7 +59,6 @@ iree_cc_binary(
     benchmark
     iree::base
     iree::base::internal::flags
-    iree::base::tracing
     iree::hal
     iree::modules::hal::types
     iree::tooling::context_util
@@ -77,7 +78,6 @@ iree_cc_binary(
     iree::base::internal::file_io
     iree::base::internal::flags
     iree::base::internal::path
-    iree::base::tracing
     iree::hal
     iree::modules::hal
     iree::testing::benchmark
@@ -96,10 +96,8 @@ iree_cc_binary(
     "iree-check-module-main.cc"
   DEPS
     iree::base
-    iree::base::core_headers
     iree::base::internal::file_io
     iree::base::internal::flags
-    iree::base::tracing
     iree::hal
     iree::modules::check
     iree::testing::gtest
@@ -145,7 +143,9 @@ iree_cc_binary(
     flatcc::runtime
     iree::base
     iree::base::internal::file_io
+    iree::base::internal::flags
     iree::base::internal::flatcc::debugging
+    iree::base::internal::flatcc::parsing
     iree::schemas::bytecode_module_def_c_fbs
     iree::vm::bytecode::module
 )
@@ -176,7 +176,6 @@ iree_cc_binary(
   DEPS
     iree::base
     iree::base::internal::flags
-    iree::base::tracing
     iree::hal
     iree::tooling::context_util
     iree::tooling::run_module
@@ -192,7 +191,6 @@ iree_cc_binary(
     iree::base
     iree::base::internal::flags
     iree::base::internal::path
-    iree::base::tracing
     iree::hal
     iree::modules::hal
     iree::tooling::device_util
@@ -213,7 +211,6 @@ iree_cc_binary(
     iree::base::internal::cpu
     iree::base::internal::flags
     iree::base::internal::path
-    iree::base::tracing
     iree::hal
     iree::modules::hal
     iree::tooling::device_util
@@ -234,21 +231,40 @@ if(IREE_BUILD_COMPILER)
     )
   endif()
 
+  if(IREE_LLVM_LINK_TARGET)
+    install(
+      TARGETS llvm-link
+      COMPONENT Compiler
+      RUNTIME DESTINATION bin
+    )
+  endif()
+
+  if(IREE_CLANG_TARGET)
+    install(
+      TARGETS clang
+      COMPONENT Compiler
+      RUNTIME DESTINATION bin
+    )
+  endif()
+
+  # Tablegen binaries are special snowflakes among special snowflakes.
+  # They must be statically linked against internal LLVM libraries, and they
+  # therefore must not depend on anything outside of the upstream tablegen
+  # libraries. These targets are specially set up to link in the correct
+  # way. This is a necessary diversion from how Bazel deals with it (which
+  # must deep-link to everything to satisfy its checks).
   iree_cc_binary(
     NAME
       iree-tblgen
     SRCS
-      "${IREE_ROOT_DIR}/third_party/llvm-project/mlir/tools/mlir-tblgen/mlir-tblgen.cpp"
+      "iree-tblgen.cpp"
       "${IREE_SOURCE_DIR}/compiler/src/iree/compiler/Dialect/VM/Tools/VMOpEncoderGen.cpp"
       "${IREE_SOURCE_DIR}/compiler/src/iree/compiler/Dialect/VM/Tools/VMOpTableGen.cpp"
     DEPS
       LLVMSupport
-      LLVMTableGen
-      MLIRSupport
-      MLIRTableGen
       MLIRTblgenLib
-      iree::compiler::Utils
     HOSTONLY
+    DISABLE_LLVM_LINK_LLVM_DYLIB
   )
 
   iree_cc_binary(
@@ -298,7 +314,6 @@ if(IREE_BUILD_COMPILER)
     DEPS
       iree::base
       iree::base::internal::flags
-      iree::base::tracing
       iree::compiler::bindings::c::headers
       iree::compiler::API::Impl
       iree::hal

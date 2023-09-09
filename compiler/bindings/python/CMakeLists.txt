@@ -31,10 +31,11 @@ set(_PYTHON_INSTALL_PREFIX "python_packages/iree_compiler")
 # to be fixed to capture the correct include directories in that macro.
 include_directories(
   "${IREE_SOURCE_DIR}/compiler/src"
+  "${IREE_SOURCE_DIR}/compiler/bindings/c"
   "${IREE_SOURCE_DIR}/llvm-external-projects/iree-dialects/include"
   "${IREE_SOURCE_DIR}/third_party/llvm-project/mlir/include"
-  "${IREE_SOURCE_DIR}/third_party/mlir-hlo/include"
-  "${IREE_SOURCE_DIR}/third_party/mlir-hlo"
+  "${IREE_SOURCE_DIR}/third_party/stablehlo/include"
+  "${IREE_SOURCE_DIR}/third_party/stablehlo"
 )
 
 # On Unixes, disable the creation of versioned/symlinked `.so` files. With
@@ -49,6 +50,51 @@ set(CMAKE_PLATFORM_NO_VERSIONED_SONAME 1)
 # Sources
 ################################################################################
 
+declare_mlir_python_sources(IREEPythonSources)
+declare_mlir_python_sources(IREEPythonSources.Dialects
+  ADD_TO_PARENT IREEPythonSources
+)
+
+declare_mlir_dialect_python_bindings(
+  ADD_TO_PARENT IREEPythonSources.Dialects
+  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
+  TD_FILE dialects/FlowBinding.td
+  SOURCES dialects/flow.py
+  DIALECT_NAME flow
+)
+
+declare_mlir_dialect_python_bindings(
+  ADD_TO_PARENT IREEPythonSources.Dialects
+  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
+  TD_FILE dialects/HALBinding.td
+  SOURCES dialects/hal.py
+  DIALECT_NAME hal
+)
+
+declare_mlir_dialect_python_bindings(
+  ADD_TO_PARENT IREEPythonSources.Dialects
+  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
+  TD_FILE dialects/StreamBinding.td
+  SOURCES dialects/stream.py
+  DIALECT_NAME stream
+)
+
+declare_mlir_dialect_python_bindings(
+  ADD_TO_PARENT IREEPythonSources.Dialects
+  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
+  TD_FILE dialects/UtilBinding.td
+  SOURCES dialects/util.py
+  DIALECT_NAME util
+)
+
+declare_mlir_dialect_python_bindings(
+  ADD_TO_PARENT IREEPythonSources.Dialects
+  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
+  TD_FILE dialects/VMBinding.td
+  SOURCES dialects/vm.py
+  DIALECT_NAME vm
+)
+
 declare_mlir_python_sources(IREECompilerAPIPythonTools
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
   SOURCES
@@ -57,7 +103,26 @@ declare_mlir_python_sources(IREECompilerAPIPythonTools
     tflite.py
     xla.py
   SOURCES_GLOB
+    api/*.py
     tools/*.py
+    tools/ir_tool/*.py
+)
+
+################################################################################
+# Extensions
+################################################################################
+
+declare_mlir_python_sources(IREECompilerPythonExtensions)
+
+declare_mlir_python_extension(IREECompilerPythonExtensions.Registration
+  MODULE_NAME _site_initialize_0
+  ADD_TO_PARENT IREECompilerPythonExtensions
+  SOURCES
+    IREECompilerRegistration.cpp
+  EMBED_CAPI_LINK_LIBS
+    iree_compiler_API_SharedImpl
+  PRIVATE_LINK_LIBS
+    LLVMSupport
 )
 
 ################################################################################
@@ -67,6 +132,8 @@ declare_mlir_python_sources(IREECompilerAPIPythonTools
 set(_SOURCE_COMPONENTS
   # Local sources.
   IREECompilerAPIPythonTools
+  IREECompilerPythonExtensions
+  IREEPythonSources
 
   MLIRPythonSources.Core
 

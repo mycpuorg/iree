@@ -11,7 +11,6 @@
 
 #include "iree/base/internal/atomics.h"
 #include "iree/base/internal/file_io.h"
-#include "iree/base/tracing.h"
 #include "iree/hal/api.h"
 #include "iree/modules/hal/module.h"
 #include "iree/runtime/instance.h"
@@ -238,7 +237,7 @@ iree_runtime_session_append_bytecode_module_from_file(
   // contents.
   iree_file_contents_t* flatbuffer_contents = NULL;
   IREE_RETURN_AND_END_ZONE_IF_ERROR(
-      z0, iree_file_read_contents(file_path,
+      z0, iree_file_read_contents(file_path, IREE_FILE_READ_FLAG_DEFAULT,
                                   iree_runtime_session_host_allocator(session),
                                   &flatbuffer_contents));
 

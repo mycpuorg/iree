@@ -38,13 +38,16 @@ void populateTosaToLinalgExtPatterns(RewritePatternSet *patterns);
 // Creates a pass that converts TOSA operations to linalg_ext.
 std::unique_ptr<OperationPass<func::FuncOp>> createTosaToLinalgExt();
 
+// Creates a pass that converts i48 to i64.
+std::unique_ptr<OperationPass<func::FuncOp>> createConverti48Toi64();
+
 //===----------------------------------------------------------------------===//
 // Register all Passes
 //===----------------------------------------------------------------------===//
 
 void registerTOSAConversionPasses();
 
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace iree_compiler
+} // namespace mlir
 
-#endif  // IREE_COMPILER_INPUTCONVERSION_TOSA_PASSES_H_
+#endif // IREE_COMPILER_INPUTCONVERSION_TOSA_PASSES_H_

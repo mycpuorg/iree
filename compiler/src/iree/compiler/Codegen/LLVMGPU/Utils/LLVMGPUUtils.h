@@ -19,12 +19,21 @@ void createAsyncGroups(RewriterBase &rewriter, func::FuncOp funcOp,
                        bool useMMASync);
 
 /// Function to do layout analysis and distribution.
-void doLayoutAnalysisAndDistribution(IRRewriter &rewriter, func::FuncOp funcOp);
+void doLayoutAnalysisAndDistribution(RewriterBase &rewriter,
+                                     func::FuncOp funcOp);
 
 /// Function to reorder transposes and elementwise ops.
-void reorderTranspose(IRRewriter &rewriter, func::FuncOp funcOp);
+void reorderTranspose(RewriterBase &rewriter, func::FuncOp funcOp);
 
-}  // namespace iree_compiler
-}  // namespace mlir
+/// Look for allocs in shared memory space with overlapping liveness,
+/// group them, and then pack all the allocations in each group into one i8
+/// alloc.
+///
+/// Also adds barriers to make sure we are done writing/reading
+/// from the previous alias group before starting a new one.
+void packSharedMemoryAlloc(func::FuncOp funcOp);
+
+} // namespace iree_compiler
+} // namespace mlir
 
 #endif

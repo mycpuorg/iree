@@ -57,6 +57,7 @@ export CC=clang
 export CXX=clang++
 python3 configure_bazel.py
 
+# TODO(mariecwhite): Use Python-based importers (no Bazel build)
 cd integrations/tensorflow
 bazel build -c opt --cxxopt="-Wno-deprecated-builtins" iree_tf_compiler:iree-import-tflite
 ./symlink_binaries.sh
@@ -95,7 +96,7 @@ for i in $(ls ${ROOT_DIR}/models/tflite/); do
     --iree-input-type=tosa \
     --iree-hal-target-backends=cuda \
     --iree-hal-cuda-llvm-target-arch=sm_80 \
-    --iree-flow-demote-f32-to-f16 \
+    --iree-opt-demote-f32-to-f16 \
     --iree-llvmcpu-debug-symbols=false \
     --iree-vm-bytecode-module-strip-source-map=true \
     --iree-vm-emit-polyglot-zip=false \

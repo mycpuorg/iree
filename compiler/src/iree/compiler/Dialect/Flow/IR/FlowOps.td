@@ -26,10 +26,16 @@ class FLOW_PureOp<string mnemonic, list<Trait> traits = []> :
 // Partitioned regions
 //===----------------------------------------------------------------------===//
 
+def OpGroupPartitionedRegionOps : OpDocGroup {
+  let summary = "Partitioned region ops";
+  let description = "";
+}
+
+let opDocGroup = OpGroupPartitionedRegionOps in {
+
 def FLOW_DispatchRegionOp : FLOW_PureOp<"dispatch.region", [
     Util_ShapeAwareOp,
-    AttrSizedOperandSegments,
-    SingleBlockImplicitTerminator<"IREE::Flow::ReturnOp">]> {
+    AttrSizedOperandSegments]> {
   let summary = [{a group of ops}];
   let description = [{
     This op is a container/grouping of ops. It represents a fusion group before
@@ -69,7 +75,6 @@ def FLOW_DispatchRegionOp : FLOW_PureOp<"dispatch.region", [
 def FLOW_DispatchWorkgroupsOp : FLOW_PureOp<"dispatch.workgroups", [
   IsolatedFromAbove,
   AttrSizedOperandSegments,
-  SingleBlockImplicitTerminator<"IREE::Flow::ReturnOp">,
   DeclareOpInterfaceMethods<Util_ClosureOpInterface>,
   DeclareOpInterfaceMethods<Util_TiedOpInterface, [
     "getTiedOperandsIndexAndLength",
@@ -177,9 +182,9 @@ def FLOW_DispatchWorkgroupsOp : FLOW_PureOp<"dispatch.workgroups", [
   let extraClassDeclaration = [{
     FunctionType getDispatchType() {
       return FunctionType::get(
-          getContext(),
-          llvm::to_vector<4>(llvm::map_range(
-              getArguments(), [](Value value) { return value.getType(); })),
+          getContext(), llvm::map_to_vector(getArguments(), [](Value value) {
+            return value.getType();
+          }),
           getResultTypes());
     }
 
@@ -623,9 +628,18 @@ def FLOW_ReturnOp : FLOW_Op<"return", [Pure, ReturnLike, Terminator]> {
   ];
 }
 
+} // OpGroupPartitionedRegionOps
+
 //===----------------------------------------------------------------------===//
 // Executables for outlined regions
 //===----------------------------------------------------------------------===//
+
+def OpGroupExecutableOps : OpDocGroup {
+  let summary = "Executable ops";
+  let description = "Executables for outlined regions.";
+}
+
+let opDocGroup = OpGroupExecutableOps in {
 
 def FLOW_ExecutableOp : FLOW_Op<"executable", [
   IsolatedFromAbove,
@@ -718,9 +732,18 @@ def FLOW_ExecutableExportOp : FLOW_Op<"executable.export", [
   let hasVerifier = 1;
 }
 
+} // OpGroupExecutableOps
+
 //===----------------------------------------------------------------------===//
 // Dispatch ops
 //===----------------------------------------------------------------------===//
+
+def OpGroupDispatchOps : OpDocGroup {
+  let summary = "Dispatch ops";
+  let description = "";
+}
+
+let opDocGroup = OpGroupDispatchOps in {
 
 def FLOW_DispatchOp : FLOW_PureOp<"dispatch", [
   AttrSizedOperandSegments,
@@ -765,13 +788,31 @@ def FLOW_DispatchOp : FLOW_PureOp<"dispatch", [
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins
-      "ExecutableExportOp":$entryPoint, "ValueRange":$workload,
+      "ExecutableExportOp":$exportOp, "ValueRange":$workload,
       "TypeRange":$resultTypes, "ValueRange":$resultDims,
       "ValueRange":$arguments, "ValueRange":$argumentDims,
       "ArrayAttr":$tiedOperands,
       CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
     OpBuilder<(ins
-      "ExecutableExportOp":$entryPoint, "ValueRange":$workload,
+      "SymbolRefAttr":$entryPoint, "ValueRange":$workload,
+      "TypeRange":$resultTypes, "ValueRange":$resultDims,
+      "ValueRange":$arguments, "ValueRange":$argumentDims,
+      "ArrayAttr":$tiedOperands,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
+    OpBuilder<(ins
+      "ExecutableExportOp":$exportOp, "ValueRange":$workload,
+      "TypeRange":$resultTypes, "ValueRange":$resultDims,
+      "ValueRange":$arguments, "ValueRange":$argumentDims,
+      "ArrayRef<int64_t>":$tiedOperands,
+      CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes),
+      [{
+        build($_builder, $_state, exportOp, workload,
+              resultTypes, resultDims, arguments, argumentDims,
+              $_builder.getIndexArrayAttr(tiedOperands),
+              attributes);
+      }]>,
+    OpBuilder<(ins
+      "SymbolRefAttr":$entryPoint, "ValueRange":$workload,
       "TypeRange":$resultTypes, "ValueRange":$resultDims,
       "ValueRange":$arguments, "ValueRange":$argumentDims,
       "ArrayRef<int64_t>":$tiedOperands,
@@ -802,9 +843,18 @@ def FLOW_DispatchOp : FLOW_PureOp<"dispatch", [
   let hasVerifier = 1;
 }
 
+} // OpGroupDispatchOps
+
 //===----------------------------------------------------------------------===//
 // Streamable call ops
 //===----------------------------------------------------------------------===//
+
+def OpGroupStreamableCallOps : OpDocGroup {
+  let summary = "Streamable call ops";
+  let description = "";
+}
+
+let opDocGroup = OpGroupStreamableCallOps in {
 
 def FLOW_FuncOp : FLOW_Op<"func", [
   CallableOpInterface,
@@ -947,6 +997,11 @@ def FLOW_CallOp : FLOW_Op<"call", [
       return (*this)->getAttrOfType<SymbolRefAttr>("callee");
     }
 
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(CallInterfaceCallable callee) {
+      (*this)->setAttr("callee", callee.get<SymbolRefAttr>());
+    }
+
     // StreamableOpInterface:
     bool isTransfer() { return false; }
 
@@ -956,14 +1011,29 @@ def FLOW_CallOp : FLOW_Op<"call", [
     ValueRange getResultDynamicDims(unsigned idx) {
       return IREE::Util::findVariadicDynamicDims(idx, getResults(), getResultDims());
     }
+
+    /// Get the argument operands to the called function as a mutable range, this is
+    /// required by the call interface.
+    MutableOperandRange getArgOperandsMutable() {
+      return getArgumentsMutable();
+    }
   }];
 
   let hasVerifier = 1;
 }
 
+} // OpGroupStreamableCallOps
+
 //===----------------------------------------------------------------------===//
 // Tensor ops
 //===----------------------------------------------------------------------===//
+
+def OpGroupTensorOps : OpDocGroup {
+  let summary = "Tensor ops";
+  let description = "";
+}
+
+let opDocGroup = OpGroupTensorOps in {
 
 // TODO(benvanik): make this behave like std.constant if not dynamic.
 def FLOW_TensorConstantOp : FLOW_Op<"tensor.constant"> {
@@ -1027,7 +1097,6 @@ def FLOW_TensorTieShapeOp : FLOW_PureOp<"tensor.tie_shape", [
 
 def FLOW_TensorReshapeOp : FLOW_PureOp<"tensor.reshape", [
   FLOW_StreamableOp,
-  AllElementTypesMatch<["source", "result"]>,
   AttrSizedOperandSegments,
   DeclareOpInterfaceMethods<Util_TiedOpInterface, [
       "getTiedResult",
@@ -1183,7 +1252,7 @@ def FLOW_TensorStoreOp : FLOW_PureOp<"tensor.store", [
   let hasFolder = 1;
 }
 
-def FLOW_TensorAllocOp : FLOW_Op<"tensor.alloc", [
+def FLOW_TensorAllocaOp : FLOW_Op<"tensor.alloca", [
   Util_ShapeAwareOp,
   MemoryEffects<[MemAlloc]>,
 ]> {
@@ -1403,8 +1472,7 @@ def FLOW_TensorUpdateOp : FLOW_PureOp<"tensor.update", [
     FLOW_ShapeDynamicDims:$target_dims,
     Variadic<FLOW_Dim>:$start_indices,
     FLOW_Tensor:$update,
-    FLOW_ShapeDynamicDims:$update_dims,
-    OptionalAttr<Util_TiedOpStorageAttr>:$tied_operands
+    FLOW_ShapeDynamicDims:$update_dims
   );
   let results = (outs
     FLOW_Tensor:$result
@@ -1413,7 +1481,7 @@ def FLOW_TensorUpdateOp : FLOW_PureOp<"tensor.update", [
   let assemblyFormat = [{
     $update `,` $target `[` $start_indices `]` `:`
     type($update) (`{` $update_dims^ `}`)? `->`
-    custom<ShapedTiedResult>(type($result), $target_dims, $tied_operands)
+    custom<ShapedTiedResult>(type($result), $target_dims)
     attr-dict-with-keyword
   }];
 
@@ -1499,14 +1567,14 @@ def FLOW_DispatchWorkgroupCountFromSliceOp :
     workgroup count. It does so by using a program slice of the values
     within the dispatch that represent the number of workgroups when available
     within the dispatch.
-    Currently the arguments of index types captured by the 
+    Currently the arguments of index types captured by the
     `flow.dispatch.workgroups` is treated as the workload for the operation.
     It is a requirement that the slice of the program that computes the
     number of workgroups will need to have its leaves be these captured values.
 
     TODO: This could be generalized in future to allow the slices to encompass
     arbitrary computation. The computation of the workgroup count can then be
-    done on the device itself, if this is data dependent. In such cases the 
+    done on the device itself, if this is data dependent. In such cases the
     workload could be more than just values of index types.
   }];
 }
@@ -1546,11 +1614,20 @@ def FLOW_DispatchWorkloadOrdinalOp :
   let hasFolder = 1;
 }
 
+} // OpGroupTensorOps
+
 //===----------------------------------------------------------------------===//
 // Collective communication ops
 //===----------------------------------------------------------------------===//
 
-def FLOW_ChannelDefaultOp : FLOW_Op<"channel.default", [
+def OpGroupCollectiveCommunicationOps : OpDocGroup {
+  let summary = "Collective communication ops";
+  let description = "";
+}
+
+let opDocGroup = OpGroupCollectiveCommunicationOps in {
+
+def FLOW_ChannelDefaultOp : FLOW_PureOp<"channel.default", [
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>
 ]> {
   let summary = [{returns a default collective communication channel}];
@@ -1572,7 +1649,38 @@ def FLOW_ChannelDefaultOp : FLOW_Op<"channel.default", [
   }];
 }
 
-def FLOW_ChannelRankOp : FLOW_Op<"channel.rank", [
+def FLOW_ChannelSplitOp : FLOW_Op<"channel.split", [
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>
+]> {
+  let summary = [{splits a collective communication channel}];
+  let description = [{
+    Partitions the group associated with the given channel into disjoint
+    subgroups for each unique value of color. Each new subgroup contains all
+    participants of the same color and within each subgroup the key argument
+    is used to define the rank order. When multiple participants in a group
+    use the same key the tie will be broken using their rank in the parent
+    group.
+  }];
+
+  let arguments = (ins
+    FLOW_Channel:$channel,
+    Index:$color,
+    Index:$key
+  );
+  let results = (outs
+    FLOW_Channel:$result
+  );
+
+  let assemblyFormat = [{
+    $channel `,` $color `,` $key
+    `:` type($channel) `->` type($result)
+    attr-dict-with-keyword
+  }];
+
+  let hasCanonicalizer = 1;
+}
+
+def FLOW_ChannelRankOp : FLOW_PureOp<"channel.rank", [
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
 ]> {
   let summary = [{returns the rank of the local participant in the group}];
@@ -1594,7 +1702,7 @@ def FLOW_ChannelRankOp : FLOW_Op<"channel.rank", [
   }];
 }
 
-def FLOW_ChannelCountOp : FLOW_Op<"channel.count", [
+def FLOW_ChannelCountOp : FLOW_PureOp<"channel.count", [
   DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
 ]> {
   let summary = [{returns the total number of participants in the group}];
@@ -1767,5 +1875,51 @@ def FLOW_CollectiveReduceScatterOp : FLOW_Op<"collective.reduce_scatter", [
       "Value":$channel)>,
   ];
 }
+
+def FLOW_CollectiveSendRecvOp : FLOW_Op<"collective.send_recv", [
+  AllTypesMatch<["source", "target", "result"]>,
+  DeclareOpInterfaceMethods<Util_TiedOpInterface, [
+    "getTiedResult",
+    "getTiedResultOperandIndex",
+    "getTiedResultOperandIndices",
+  ]>,
+]> {
+  let summary = [{performs a grouped send and receive operation}];
+  let description = [{The operation sends data to the rank specificied by send
+    and receives data from the rank specified by recv. If send is -1, this rank
+    will not send any data. If recv is -1, this rank will not receive any data
+    and the output will be all zeros.}];
+
+  let arguments = (ins
+    FLOW_CollectiveElementTypeAttr:$element_type,
+    FLOW_Tensor:$target,
+    FLOW_ShapeDynamicDims:$target_dims,
+    FLOW_Tensor:$source,
+    FLOW_Channel:$channel,
+    Index:$send,
+    Index:$recv,
+    OptionalAttr<Util_TiedOpStorageAttr>:$tied_operands
+  );
+  let results = (outs
+    FLOW_Tensor:$result
+  );
+  let assemblyFormat = [{
+    $element_type `,` $target `,` $source `,` $channel `,` $send `,` $recv `:`
+    `(` type($target) `,` type($source) `,` type($channel) `,` type($send) `,` type($recv) `)` `->`
+    custom<ShapedTiedResult>(type($result), $target_dims, $tied_operands)
+    attr-dict-with-keyword
+  }];
+  let builders = [
+    OpBuilder<(ins
+      "CollectiveElementTypeAttr":$element_type,
+      "Value":$target,
+      "Value":$source,
+      "Value":$channel,
+      "Value":$send,
+      "Value":$recv)>,
+  ];
+}
+
+} // OpGroupCollectiveCommunicationOps
 
 #endif  // IREE_DIALECT_FLOW_OPS

@@ -6,6 +6,7 @@
 
 #include "iree/compiler/Dialect/HAL/Target/LLVMCPU/LinkerTool.h"
 #include "iree/compiler/Utils/ToolUtils.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -36,7 +37,7 @@ namespace HAL {
 // equivalent). For SIMD support, also set
 // `-iree-llvmcpu-target-cpu-features=+simd128`.
 class WasmLinkerTool : public LinkerTool {
- public:
+public:
   using LinkerTool::LinkerTool;
 
   std::string getWasmToolPath() const {
@@ -56,15 +57,16 @@ class WasmLinkerTool : public LinkerTool {
     // or install directories) for common tools.
     std::string toolPath = findToolFromExecutableDir(
         {"wasm-ld", "iree-lld", "lld", "ld.lld", "lld-link"});
-    if (!toolPath.empty()) return toolPath;
+    if (!toolPath.empty())
+      return toolPath;
 
     llvm::errs() << "No Wasm linker tool specified or discovered\n";
     return "";
   }
 
-  LogicalResult configureModule(
-      llvm::Module *llvmModule,
-      ArrayRef<llvm::Function *> exportedFuncs) override {
+  LogicalResult
+  configureModule(llvm::Module *llvmModule,
+                  ArrayRef<llvm::Function *> exportedFuncs) override {
     // https://lld.llvm.org/WebAssembly.html#exports
     // Note: once we can set --shared this shouldn't be needed, since we set
     // default visibility on exported functions.
@@ -75,8 +77,9 @@ class WasmLinkerTool : public LinkerTool {
     return success();
   }
 
-  std::optional<Artifacts> linkDynamicLibrary(
-      StringRef libraryName, ArrayRef<Artifact> objectFiles) override {
+  std::optional<Artifacts>
+  linkDynamicLibrary(StringRef libraryName,
+                     ArrayRef<Artifact> objectFiles) override {
     Artifacts artifacts;
 
     // Create the wasm binary file name; if we only have a single input object
@@ -120,7 +123,7 @@ class WasmLinkerTool : public LinkerTool {
     };
 
     // Strip debug information when not requested.
-    if (!targetOptions.debugSymbols) {
+    if (!targetOptions.target.debugSymbols) {
       flags.push_back("--strip-debug");
     }
 
@@ -131,17 +134,19 @@ class WasmLinkerTool : public LinkerTool {
     }
 
     auto commandLine = llvm::join(flags, " ");
-    if (failed(runLinkCommand(commandLine))) return std::nullopt;
+    if (failed(runLinkCommand(commandLine)))
+      return std::nullopt;
     return artifacts;
   }
 };
 
-std::unique_ptr<LinkerTool> createWasmLinkerTool(
-    const llvm::Triple &targetTriple, LLVMTargetOptions &targetOptions) {
+std::unique_ptr<LinkerTool>
+createWasmLinkerTool(const llvm::Triple &targetTriple,
+                     LLVMTargetOptions &targetOptions) {
   return std::make_unique<WasmLinkerTool>(targetTriple, targetOptions);
 }
 
-}  // namespace HAL
-}  // namespace IREE
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace HAL
+} // namespace IREE
+} // namespace iree_compiler
+} // namespace mlir

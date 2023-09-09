@@ -21,7 +21,6 @@ iree_cc_library(
     ::caching_allocator
     ::debug_allocator
     iree::base
-    iree::base::tracing
     iree::hal
   PUBLIC
 )
@@ -35,7 +34,6 @@ iree_cc_library(
     "buffer_transfer.c"
   DEPS
     iree::base
-    iree::base::tracing
     iree::hal
   PUBLIC
 )
@@ -49,7 +47,6 @@ iree_cc_library(
     "debug_allocator.c"
   DEPS
     iree::base
-    iree::base::tracing
     iree::hal
   PUBLIC
 )
@@ -65,7 +62,6 @@ iree_cc_library(
     ::resource_set
     iree::base
     iree::base::internal::arena
-    iree::base::tracing
     iree::hal
   PUBLIC
 )
@@ -80,7 +76,6 @@ iree_cc_library(
   DEPS
     iree::base
     iree::base::internal::synchronization
-    iree::base::tracing
     iree::hal
   PUBLIC
 )
@@ -96,7 +91,21 @@ iree_cc_library(
     ::resource_set
     iree::base
     iree::base::internal::arena
-    iree::base::tracing
+    iree::hal
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    file_transfer
+  HDRS
+    "file_transfer.h"
+  SRCS
+    "file_transfer.c"
+  DEPS
+    ::memory_file
+    iree::base
+    iree::base::internal
     iree::hal
   PUBLIC
 )
@@ -112,7 +121,6 @@ iree_cc_library(
   DEPS
     iree::base
     iree::base::internal::dynamic_library
-    iree::base::tracing
     iree::hal
   PUBLIC
 )
@@ -131,6 +139,19 @@ iree_cc_test(
 
 iree_cc_library(
   NAME
+    memory_file
+  HDRS
+    "memory_file.h"
+  SRCS
+    "memory_file.c"
+  DEPS
+    iree::base
+    iree::hal
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
     mpi_channel_provider
   HDRS
     "mpi_channel_provider.h"
@@ -139,7 +160,6 @@ iree_cc_library(
   DEPS
     ::libmpi
     iree::base
-    iree::base::tracing
     iree::hal
   PUBLIC
 )
@@ -153,8 +173,8 @@ iree_cc_library(
     "resource_set.c"
   DEPS
     iree::base
+    iree::base::internal
     iree::base::internal::arena
-    iree::base::tracing
     iree::hal
   PUBLIC
 )
@@ -196,7 +216,6 @@ iree_cc_library(
   DEPS
     iree::base
     iree::base::internal::synchronization
-    iree::base::tracing
     iree::hal
   PUBLIC
 )

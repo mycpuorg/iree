@@ -4,16 +4,18 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree/compiler/Codegen/PassDetail.h"
-#include "iree/compiler/Codegen/Passes.h"
+#include "iree/compiler/Codegen/Common/PassDetail.h"
+#include "iree/compiler/Codegen/Common/Passes.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
+#include "mlir/Dialect/Tensor/Utils/Utils.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Matchers.h"
@@ -60,8 +62,71 @@ struct LowerUnPackPattern : public OpRewritePattern<tensor::UnPackOp> {
   }
 };
 
+/// Folding trailing unit dims away from transpose op if they are not
+/// transposed.
+/// TODO(hanchung): Remove the workaround after we materialize encoding to do 1D
+/// data tiling instead of 2D with unit dimension for AVX512 targets. This is a
+/// workaround for 1D data tiling which is represented in 2D with an unit
+/// dimension form.
+struct FoldTrailingUnitTranspose
+    : public OpRewritePattern<linalg::TransposeOp> {
+  using OpRewritePattern<linalg::TransposeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::TransposeOp op,
+                                PatternRewriter &rewriter) const override {
+    auto inputTy = llvm::cast<ShapedType>(op.getInput().getType());
+    int numDropDims = 0;
+    ArrayRef<int64_t> perm = op.getPermutation();
+    for (int idx = inputTy.getRank() - 1; idx >= 0; idx--) {
+      if (idx != perm[idx] || inputTy.getDimSize(idx) != 1)
+        break;
+      numDropDims++;
+    }
+    if (numDropDims == 0)
+      return failure();
+
+    // Dropping all dims. Elide now to avoid corner cases.
+    if (numDropDims == inputTy.getRank()) {
+      rewriter.replaceOp(op, op.getInput());
+      return success();
+    }
+
+    Location loc = op.getLoc();
+    SmallVector<OpFoldResult> srcMixedSizes =
+        tensor::getMixedSizes(rewriter, loc, op.getInput());
+    SmallVector<OpFoldResult> mixedStride(inputTy.getRank(),
+                                          rewriter.getIndexAttr(1));
+    SmallVector<OpFoldResult> mixedOffsets(inputTy.getRank(),
+                                           rewriter.getIndexAttr(0));
+    auto src = rewriter.create<tensor::ExtractSliceOp>(
+        loc,
+        RankedTensorType::get(inputTy.getShape().drop_back(numDropDims),
+                              inputTy.getElementType()),
+        op.getInput(), mixedOffsets, srcMixedSizes, mixedStride);
+
+    SmallVector<OpFoldResult> destMixedSizes =
+        tensor::getMixedSizes(rewriter, loc, op.getInit());
+    auto initTy = llvm::cast<ShapedType>(op.getInit().getType());
+    destMixedSizes.resize(initTy.getRank() - numDropDims);
+    auto dest = rewriter.create<tensor::EmptyOp>(loc, destMixedSizes,
+                                                 initTy.getElementType());
+    auto transp = rewriter.create<linalg::TransposeOp>(
+        loc, src, dest, perm.drop_back(numDropDims));
+    destMixedSizes.resize(initTy.getRank(), rewriter.getIndexAttr(1));
+    auto insertSliceOp = rewriter.create<tensor::InsertSliceOp>(
+        loc, transp.getResult()[0], op.getInit(), mixedOffsets, destMixedSizes,
+        mixedStride);
+    rewriter.replaceOp(op, insertSliceOp.getResult());
+
+    return success();
+  }
+};
+
 struct DecomposePackUnPackOpsPass
     : public DecomposePackUnPackOpsBase<DecomposePackUnPackOpsPass> {
+  DecomposePackUnPackOpsPass(bool tileOuterToOne) {
+    this->tileOuterToOne = tileOuterToOne;
+  }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry
         .insert<linalg::LinalgDialect, func::FuncDialect, arith::ArithDialect,
@@ -70,7 +135,7 @@ struct DecomposePackUnPackOpsPass
 
   void runOnOperation() override;
 };
-}  // namespace
+} // namespace
 
 void DecomposePackUnPackOpsPass::runOnOperation() {
   MLIRContext *ctx = &getContext();
@@ -89,7 +154,9 @@ void DecomposePackUnPackOpsPass::runOnOperation() {
     }
   }
 
-  {
+  // Do not convert pack and unpack ops if outer dims are expected to always be
+  // tiled to one.
+  if (!tileOuterToOne) {
     RewritePatternSet patterns(ctx);
     patterns.add<LowerPackPattern, LowerUnPackPattern>(ctx);
     if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
@@ -129,7 +196,8 @@ void DecomposePackUnPackOpsPass::runOnOperation() {
       FailureOr<scf::SCFTileAndFuseResult> tileAndFuseResult =
           scf::tileConsumerAndFuseProducerGreedilyUsingSCFForOp(
               rewriter, cast<TilingInterface>(op.getOperation()), packOptions);
-      if (failed(tileAndFuseResult)) return signalPassFailure();
+      if (failed(tileAndFuseResult))
+        return signalPassFailure();
       rewriter.replaceOp(op, tileAndFuseResult->replacements[op.getResult()]);
     });
 
@@ -156,7 +224,8 @@ void DecomposePackUnPackOpsPass::runOnOperation() {
       FailureOr<scf::SCFTilingResult> tilingResult = scf::tileUsingSCFForOp(
           rewriter, cast<TilingInterface>(op.getOperation()),
           unpackTilingOptions);
-      if (failed(tilingResult)) return signalPassFailure();
+      if (failed(tilingResult))
+        return signalPassFailure();
       rewriter.replaceOp(op, tilingResult->replacements);
     });
 
@@ -172,7 +241,7 @@ void DecomposePackUnPackOpsPass::runOnOperation() {
   {
     RewritePatternSet patterns(ctx);
     linalg::populateLinalgTilingCanonicalizationPatterns(patterns);
-    memref::populateResolveRankedShapeTypeResultDimsPatterns(patterns);
+    memref::populateResolveRankedShapedTypeResultDimsPatterns(patterns);
     ctx->getOrLoadDialect<tensor::TensorDialect>()->getCanonicalizationPatterns(
         patterns);
     if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
@@ -194,12 +263,21 @@ void DecomposePackUnPackOpsPass::runOnOperation() {
       return signalPassFailure();
     }
   }
+
+  // Fold trailing unit dims away for linalg.transpose ops.
+  {
+    RewritePatternSet patterns(ctx);
+    patterns.add<FoldTrailingUnitTranspose>(ctx);
+    if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+      return signalPassFailure();
+    }
+  }
 }
 
 std::unique_ptr<OperationPass<func::FuncOp>>
-createDecomposePackUnPackOpsPass() {
-  return std::make_unique<DecomposePackUnPackOpsPass>();
+createDecomposePackUnPackOpsPass(bool tileOuterToOne) {
+  return std::make_unique<DecomposePackUnPackOpsPass>(tileOuterToOne);
 }
 
-}  // namespace iree_compiler
-}  // namespace mlir
+} // namespace iree_compiler
+} // namespace mlir

@@ -54,11 +54,25 @@ def IPO : Pass<"iree-util-ipo", "mlir::ModuleOp"> {
   }];
 }
 
+def OutlineConstants :
+    Pass<"iree-util-outline-constants", "mlir::ModuleOp"> {
+  let summary = "Outlines tensor constants into util.globals at the module level.";
+  let constructor = [{
+    mlir::iree_compiler::IREE::Util::createOutlineConstantsPass()
+  }];
+}
+
 def PropagateSubranges : Pass<"iree-util-propagate-subranges", "mlir::ModuleOp"> {
   let summary = "Propagates resource subranges across the program.";
   let constructor = [{
     mlir::iree_compiler::IREE::Util::createPropagateSubrangesPass()
   }];
+}
+
+def StripAndSplatConstants :
+    Pass<"iree-util-strip-and-splat-constants", "mlir::ModuleOp"> {
+  let summary = "Strips constant util.global ops and replaces them with splats.";
+  let constructor = "mlir::iree_compiler::IREE::Util::createStripAndSplatConstantsPass()";
 }
 
 def StripDebugOps : Pass<"iree-util-strip-debug-ops", ""> {
@@ -102,6 +116,27 @@ def SimplifyGlobalAccesses :
 }
 
 //===----------------------------------------------------------------------===//
+// Resource Management
+//===----------------------------------------------------------------------===//
+
+def ImportResources : Pass<"iree-util-import-resources", ""> {
+  let summary = "Imports IR with arbitrary large-data into resources that IREE can manage efficiently";
+  let description = [{
+    MLIR has many interesting ways to store large constants, most of which
+    derive from *ElementsAttr. Given the uniquing/inline behavior, this exacts
+    very large runtime and memory overhead costs.
+
+    This is a temporary pass to convert a majority of the legacy
+    DenseElementsAttr attributes to DenseResourceElementsAttr. Ideally this
+    is done at the source (frontend), but this pass is provided to aid
+    transition and testing by doing a manual conversion with iree-opt.
+  }];
+  let constructor = [{
+    mlir::iree_compiler::IREE::Util::createImportResourcesPass()
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Type Conversion
 //===----------------------------------------------------------------------===//
 
@@ -140,16 +175,16 @@ def PromoteBF16ToF32 : Pass<"iree-util-promote-bf16-to-f32", "mlir::ModuleOp"> {
   }];
 }
 
-def PromoteArithBF16ToF32 : Pass<"iree-util-promote-arith-bf16-to-f32", "mlir::ModuleOp"> {
-  let summary = "Promotes bf16 arith operations to f32 ops with ext/trunc.";
+//===----------------------------------------------------------------------===//
+// Debug/test passes
+//===----------------------------------------------------------------------===//
+
+def AnnotateOpOrdinals : Pass<"iree-util-annotate-op-ordinals", "mlir::ModuleOp"> {
+  let summary = "Annotates ops with globally unique IDs for debugging.";
   let constructor = [{
-    mlir::iree_compiler::IREE::Util::createPromoteArithBF16ToF32Pass()
+    mlir::iree_compiler::IREE::Util::createAnnotateOpOrdinalsPass()
   }];
 }
-
-//===----------------------------------------------------------------------===//
-// Test passes
-//===----------------------------------------------------------------------===//
 
 def TestConversion : Pass<"iree-util-test-conversion", "mlir::ModuleOp"> {
   let summary = "Tests util dialect conversion patterns.";

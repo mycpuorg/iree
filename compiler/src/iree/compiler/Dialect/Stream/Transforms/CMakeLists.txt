@@ -29,8 +29,6 @@ iree_cc_library(
     "LayoutSlices.cpp"
     "MaterializeBuiltins.cpp"
     "MaterializeCopyOnWrite.cpp"
-    "MemoizeChannels.cpp"
-    "OutlineConstants.cpp"
     "PackAllocations.cpp"
     "PackConstants.cpp"
     "PackDispatchOperands.cpp"
@@ -42,6 +40,7 @@ iree_cc_library(
     "ScheduleConcurrency.cpp"
     "ScheduleExecution.cpp"
     "SpecializeDispatches.cpp"
+    "VerifyAsyncAccessRanges.cpp"
     "VerifyLowerings.cpp"
   DEPS
     ::PassesIncGen
@@ -50,6 +49,7 @@ iree_cc_library(
     MLIRAffineDialect
     MLIRAnalysis
     MLIRArithDialect
+    MLIRComplexDialect
     MLIRControlFlowDialect
     MLIRFuncDialect
     MLIRIR
@@ -66,6 +66,7 @@ iree_cc_library(
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::Stream::Analysis
+    iree::compiler::Dialect::Stream::Builtins
     iree::compiler::Dialect::Stream::Conversion
     iree::compiler::Dialect::Stream::Conversion::FlowToStream
     iree::compiler::Dialect::Stream::Conversion::HALToStream

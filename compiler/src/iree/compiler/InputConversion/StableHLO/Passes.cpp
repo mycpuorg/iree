@@ -22,52 +22,36 @@
 namespace mlir::iree_compiler::stablehlo {
 namespace {
 #define GEN_PASS_REGISTRATION
-#include "iree/compiler/InputConversion/StableHLO/Passes.h.inc"  // IWYU pragma: export
-}  // namespace
+#include "iree/compiler/InputConversion/StableHLO/Passes.h.inc" // IWYU pragma: export
+} // namespace
 
 namespace {
-// TODO(#8745): remove these flags when the -iree-flow-demote-* flags can be
-// used without tripping upstream verifier issues.
-llvm::cl::opt<bool> clDemoteI64ToI32(
-    "iree-stablehlo-demote-i64-to-i32",
-    llvm::cl::desc(
-        "Converts all StableHLO i64 ops and values into i32 counterparts."),
-    llvm::cl::init(true));
-llvm::cl::opt<bool> clDemoteF64ToF32(
-    "iree-stablehlo-demote-f64-to-f32",
-    llvm::cl::desc(
-        "Converts all StableHLO f64 ops and values into f32 counterparts."),
-    llvm::cl::init(true));
-llvm::cl::opt<bool> clPromoteBF16ToF32(
-    "iree-stablehlo-promote-bf16-to-f32",
-    llvm::cl::desc(
-        "Converts all StableHLO bf16 ops and values into f32 counterparts."),
-    llvm::cl::init(true));
 
 void registerStableHLOConversionPassPipeline() {
-  PassPipelineRegistration<> stablehlo(
+  PassPipelineRegistration<StableHloOptions> stablehlo(
       "iree-stablehlo-input-transformation-pipeline",
       "Runs the StableHLO IREE flow dialect transformation pipeline",
-      [](OpPassManager &passManager) {
-        buildStableHLOInputConversionPassPipeline(passManager);
+      [](OpPassManager &passManager, const StableHloOptions &options) {
+        buildStableHLOInputConversionPassPipeline(passManager, options);
       });
 }
 
 // Prepare HLO for use as an input to the Flow dialect.
-void buildStableHLOInputConversionPassPipelineImpl(OpPassManager &passManager) {
+void buildStableHLOInputConversionPassPipelineImpl(
+    OpPassManager &passManager, const StableHloOptions &options, bool detuple) {
   passManager.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
+  passManager.addNestedPass<func::FuncOp>(createStableHLOCanonicalize());
+  passManager.addNestedPass<func::FuncOp>(mlir::createCSEPass());
   passManager.addNestedPass<func::FuncOp>(
       stablehlo::createLegalizeControlFlow());
 
-  // Currently we don't handle SCF ops well and have to convert them all to CFG.
-  // In the future it would be nice if we could have all of flow be both scf
-  // and cfg compatible.
-  passManager.addNestedPass<func::FuncOp>(createTopLevelSCFToCFGPass());
-  // TODO(#12678): Port StableHLO detuple pass.
+  passManager.addPass(createFlattenTuplesInSCF());
+  if (detuple) {
+    passManager.addPass(createFlattenTuplesInCFG());
+  }
 
-  passManager.addNestedPass<func::FuncOp>(
-      createStableHLOToStableHLOPreprocessing());
-  passManager.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
+  passManager.addPass(createStableHLOToStableHLOPreprocessing());
+  passManager.addNestedPass<func::FuncOp>(createStableHLOCanonicalize());
 
   // Various shape functions may have been materialized in the `shape.shape_of`
   // style of treating shapes as tensors. We prefer to legalize these to
@@ -76,6 +60,7 @@ void buildStableHLOInputConversionPassPipelineImpl(OpPassManager &passManager) {
   passManager.addNestedPass<func::FuncOp>(createShapeToShapeLowering());
   passManager.addPass(createConvertShapeToStandardPass());
   passManager.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
+  passManager.addNestedPass<func::FuncOp>(createStableHLOCanonicalize());
 
   // We also don't handle calls well on the old codepath; until we remove the
   // use of the CFG we can continue inlining.
@@ -85,19 +70,20 @@ void buildStableHLOInputConversionPassPipelineImpl(OpPassManager &passManager) {
   // stack. This is often required because of implicit i64 insertion by JAX/HLO
   // that we don't want forcing 32-bit embedded devices to support.
   // TODO(#8745): remove these and prefer the flow pipeline options instead.
-  if (clDemoteI64ToI32) {
+  if (options.demoteI64ToI32) {
     passManager.addPass(IREE::Util::createDemoteI64ToI32Pass());
   }
-  if (clDemoteF64ToF32) {
+  if (options.demoteF64ToF32) {
     passManager.addPass(IREE::Util::createDemoteF64ToF32Pass());
   }
-  if (clPromoteBF16ToF32) {
+  if (options.promoteBF16ToF32) {
     passManager.addPass(IREE::Util::createPromoteBF16ToF32Pass());
   }
 
   // Perform initial cleanup. createLegalizeInputTypes could rewrite types. In
   // this context, some operations could be folded away.
   passManager.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
+  passManager.addNestedPass<func::FuncOp>(createStableHLOCanonicalize());
   passManager.addNestedPass<func::FuncOp>(mlir::createCSEPass());
 
   // Convert to Linalg. After this point, StableHLO will be eliminated.
@@ -105,20 +91,30 @@ void buildStableHLOInputConversionPassPipelineImpl(OpPassManager &passManager) {
       stablehlo::createLegalizeShapeComputations());
   passManager.addNestedPass<func::FuncOp>(
       stablehlo::createConvertStableHloToLinalgExt());
-  passManager.addPass(stablehlo::createConvertStableHloToLinalg());
+  passManager.addNestedPass<func::FuncOp>(stablehlo::createLegalizeChlo());
+  passManager.addPass(createConvertStableHloToIreeInputDialects());
   // Ensure conversion completed.
   passManager.addPass(createReconcileUnrealizedCastsPass());
 
   // Note that some StableHLO ops are left by the above and must resolve via
   // canonicalization. See comments in the above pass and find a better way.
   passManager.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
+  passManager.addNestedPass<func::FuncOp>(createStableHLOCanonicalize());
 
   passManager.addPass(stablehlo::createVerifyCompilerStableHloInputLegality());
 }
-}  // namespace
+} // namespace
 
-void buildStableHLOInputConversionPassPipeline(OpPassManager &passManager) {
-  buildStableHLOInputConversionPassPipelineImpl(passManager);
+void buildStableHLOInputConversionPassPipeline(
+    OpPassManager &passManager, const StableHloOptions &options) {
+  buildStableHLOInputConversionPassPipelineImpl(passManager, options,
+                                                /*detuple=*/false);
+}
+
+void buildStableHLOXLAInputConversionPassPipeline(
+    OpPassManager &passManager, const StableHloOptions &options) {
+  buildStableHLOInputConversionPassPipelineImpl(passManager, options,
+                                                /*detuple=*/true);
 }
 
 void registerStableHLOConversionPasses() {
@@ -129,4 +125,4 @@ void registerStableHLOConversionPasses() {
   registerStableHLOConversionPassPipeline();
 }
 
-}  // namespace mlir::iree_compiler::stablehlo
+} // namespace mlir::iree_compiler::stablehlo

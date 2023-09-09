@@ -14,14 +14,14 @@ iree_cc_library(
   NAME
     Utils
   HDRS
-    "EncodingInfo.h"
     "GPUUtils.h"
+    "LinalgOpInfo.h"
     "LinkingUtils.h"
     "MarkerUtils.h"
     "Utils.h"
   SRCS
-    "EncodingInfo.cpp"
     "GPUUtils.cpp"
+    "LinalgOpInfo.cpp"
     "LinkingUtils.cpp"
     "MarkerUtils.cpp"
     "Utils.cpp"
@@ -34,7 +34,7 @@ iree_cc_library(
     MLIRArithDialect
     MLIRArithUtils
     MLIRFuncDialect
-    MLIRGPUOps
+    MLIRGPUDialect
     MLIRIR
     MLIRLinalgDialect
     MLIRLinalgTransforms

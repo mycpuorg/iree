@@ -129,8 +129,8 @@ def configure_iree_submodule_deps(iree_repo_alias = "@", iree_path = "./"):
 
     maybe(
         native.local_repository,
-        name = "mlir-hlo",
-        path = paths.join(iree_path, "third_party/mlir-hlo"),
+        name = "stablehlo",
+        path = paths.join(iree_path, "third_party/stablehlo"),
     )
 
     maybe(
@@ -140,9 +140,8 @@ def configure_iree_submodule_deps(iree_repo_alias = "@", iree_path = "./"):
     )
 
     maybe(
-        native.new_local_repository,
+        native.local_repository,
         name = "cpuinfo",
-        build_file = iree_repo_alias + "//:build_tools/third_party/cpuinfo/BUILD.overlay",
         path = paths.join(iree_path, "third_party/cpuinfo"),
     )
 
@@ -151,13 +150,6 @@ def configure_iree_submodule_deps(iree_repo_alias = "@", iree_path = "./"):
         name = "spirv_cross",
         build_file = iree_repo_alias + "//:build_tools/third_party/spirv_cross/BUILD.overlay",
         path = paths.join(iree_path, "third_party/spirv_cross"),
-    )
-
-    maybe(
-        native.new_local_repository,
-        name = "torch-mlir-dialects",
-        build_file = iree_repo_alias + "//:build_tools/third_party/torch-mlir-dialects/BUILD.overlay",
-        path = paths.join(iree_path, "third_party/torch-mlir-dialects"),
     )
 
     maybe(
@@ -172,4 +164,11 @@ def configure_iree_submodule_deps(iree_repo_alias = "@", iree_path = "./"):
         name = "nccl",
         build_file = iree_repo_alias + "//:build_tools/third_party/nccl/BUILD.overlay",
         path = paths.join(iree_path, "third_party/nccl"),
+    )
+
+    maybe(
+        native.new_local_repository,
+        name = "webgpu_headers",
+        build_file = iree_repo_alias + "//:build_tools/third_party/webgpu-headers/BUILD.overlay",
+        path = paths.join(iree_path, "third_party/webgpu-headers"),
     )

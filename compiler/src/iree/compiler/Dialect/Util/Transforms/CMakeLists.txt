@@ -18,6 +18,7 @@ iree_cc_library(
     "Passes.h.inc"
     "Patterns.h"
   SRCS
+    "AnnotateOpOrdinals.cpp"
     "ApplyPatterns.cpp"
     "CombineInitializers.cpp"
     "ConvertPrimitiveType.cpp"
@@ -27,11 +28,14 @@ iree_cc_library(
     "FuseGlobals.cpp"
     "HoistIntoGlobals.cpp"
     "IPO.cpp"
+    "ImportResources.cpp"
+    "OutlineConstants.cpp"
     "PassDetail.h"
     "Passes.cpp"
     "Patterns.cpp"
     "PropagateSubranges.cpp"
     "SimplifyGlobalAccesses.cpp"
+    "StripAndSplatConstants.cpp"
     "StripDebugOps.cpp"
     "TestConversion.cpp"
     "TestFloatRangeAnalysis.cpp"
@@ -52,6 +56,7 @@ iree_cc_library(
     MLIRSCFDialect
     MLIRSupport
     MLIRTransforms
+    MLIRVectorDialect
     iree::compiler::Dialect::Util::Analysis
     iree::compiler::Dialect::Util::Analysis::Attributes
     iree::compiler::Dialect::Util::Analysis::Constant
